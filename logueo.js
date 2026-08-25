@@ -1,9 +1,93 @@
 /**
  * logueo.js - Módulo de Autenticación y Control de Sesión
  * Sistema: SALVUCCI / AgroSoft J&L
- * Descripción: Manejo de login híbrido (Supabase Online + SQLite Local Offline vía apiLocal IPC)
+ * Compatibilidad: Híbrido Electron (SQLite Offline) + Safari / Web (Supabase + Storage)
  * Lenguaje Visual: Apple Soft Studio / Roboto Font
  */
+
+/* =======================================================================
+   0. ADAPTADOR DE COMPATIBILIDAD WEB / SAFARI (FALLBACK API LOCAL)
+   ======================================================================= */
+if (!window.apiLocal) {
+    console.log("🌐 [Entorno Web / Safari detectado] Inicializando adaptador cliente...");
+    window.apiLocal = {
+        isWeb: true,
+        // Simulación de persistencia en localStorage para Safari
+        query: async function({ sql, params = [] }) {
+            const sqlUpper = sql.trim().toUpperCase();
+
+            // Consulta de sesión activa
+            if (sqlUpper.includes('FROM SESION_ACTIVA')) {
+                const sesionStr = localStorage.getItem('sesion_activa_salvucci');
+                if (sesionStr) {
+                    try {
+                        const sesionObj = JSON.parse(sesionStr);
+                        return { data: [sesionObj], error: null };
+                    } catch (e) {
+                        return { data: [], error: null };
+                    }
+                }
+                return { data: [], error: null };
+            }
+
+            // Guardado de sesión activa
+            if (sqlUpper.includes('INSERT INTO SESION_ACTIVA')) {
+                const sesionGuardar = {
+                    id: 1,
+                    usuario_id: params[0] || 0,
+                    nombre_usuario: params[1] || 'Operario',
+                    token: params[2] || 'TOKEN_WEB',
+                    fecha_inicio: params[3] || new Date().toISOString(),
+                    rol: params[4] || 'OPERADOR',
+                    correo: params[5] || ''
+                };
+                localStorage.setItem('sesion_activa_salvucci', JSON.stringify(sesionGuardar));
+                return { data: { changes: 1 }, error: null };
+            }
+
+            // Cierre de sesión activa
+            if (sqlUpper.includes('DELETE FROM SESION_ACTIVA')) {
+                localStorage.removeItem('sesion_activa_salvucci');
+                return { data: { changes: 1 }, error: null };
+            }
+
+            // Fallback para usuarios en Safari directo desde Supabase
+            if (sqlUpper.includes('FROM USUARIOS') && window.supabase) {
+                try {
+                    const { data, error } = await window.supabase
+                        .from('usuarios')
+                        .select('*')
+                        .or(`usuario.ilike.${params[0]},correo.ilike.${params[0]}`)
+                        .eq('clave', params[2])
+                        .limit(1);
+
+                    return { data: data || [], error: error ? error.message : null };
+                } catch (err) {
+                    return { data: [], error: err.message };
+                }
+            }
+
+            return { data: [], error: null };
+        },
+
+        supabaseLogin: async function({ email, pass }) {
+            if (!window.supabase) return { data: null, error: 'Cliente Supabase no disponible' };
+            try {
+                const { data, error } = await window.supabase
+                    .from('usuarios')
+                    .select('*')
+                    .or(`correo.eq.${email},usuario.eq.${email}`)
+                    .eq('clave', pass)
+                    .single();
+
+                if (error) return { data: null, error: error.message };
+                return { data, error: null };
+            } catch (err) {
+                return { data: null, error: err.message };
+            }
+        }
+    };
+}
 
 /* Declaración segura de constantes globales de roles */
 window.ROL_LABELS_HEADER = window.ROL_LABELS_HEADER || {
@@ -73,13 +157,13 @@ window.m_iniciarSesion = async function() {
         return;
     }
 
-    const textoOriginalBtn = btnTexto ? btnTexto.innerText : "INGRESAR";
+    const textoOriginalBtn = btnTexto ? btnTexto.innerText : "INGRESAR AL SISTEMA";
     window.m_setEstadoBotonLogin(true, "VERIFICANDO CREDENCIALES...");
 
     let usuarioValido = null;
     let esOffline = false;
 
-    /* Paso 1 - Intento de Login Online mediante IPC (Main Process) */
+    /* Paso 1 - Intento de Login Online con Supabase */
     try {
         if (window.apiLocal && typeof window.apiLocal.supabaseLogin === 'function') {
             const resOnline = await window.apiLocal.supabaseLogin({ email, pass });
@@ -92,7 +176,7 @@ window.m_iniciarSesion = async function() {
         esOffline = true;
     }
 
-    /* Paso 2 - Fallback Offline (Consulta a SQLite Local vía apiLocal.query) */
+    /* Paso 2 - Fallback Offline (Consulta a SQLite Local / Adaptador Web) */
     if (!usuarioValido && window.apiLocal) {
         try {
             const resLocal = await window.apiLocal.query({
@@ -105,7 +189,7 @@ window.m_iniciarSesion = async function() {
                 usuarioValido = {
                     id: userLocal.id,
                     operario: userLocal.nombre || userLocal.usuario,
-                    correo: userLocal.usuario,
+                    correo: userLocal.correo || userLocal.usuario,
                     rol: userLocal.rol || 'OPERADOR'
                 };
                 esOffline = true;
@@ -121,7 +205,7 @@ window.m_iniciarSesion = async function() {
         return;
     }
 
-    /* Paso 3 - Persistencia de Sesión Activa vía apiLocal */
+    /* Paso 3 - Persistencia de Sesión Activa */
     if (window.apiLocal) {
         try {
             const fechaAhora = new Date().toISOString();
@@ -132,33 +216,11 @@ window.m_iniciarSesion = async function() {
                 sql: `
                     INSERT INTO sesion_activa (id, usuario_id, nombre_usuario, token, fecha_inicio, rol, correo)
                     VALUES (1, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        usuario_id = excluded.usuario_id,
-                        nombre_usuario = excluded.nombre_usuario,
-                        token = excluded.token,
-                        fecha_inicio = excluded.fecha_inicio,
-                        rol = excluded.rol,
-                        correo = excluded.correo
                 `,
                 params: [usuarioValido.id || 0, nombreOperario, 'SESSION_TOKEN_LOCAL', fechaAhora, rolUsuario, email]
             });
-
-            if (!esOffline) {
-                await window.apiLocal.query({
-                    sql: `
-                        INSERT INTO usuarios (usuario, clave, nombre, rol, ultimo_acceso, sincronizado)
-                        VALUES (?, ?, ?, ?, ?, 1)
-                        ON CONFLICT(usuario) DO UPDATE SET
-                            clave = excluded.clave,
-                            nombre = excluded.nombre,
-                            rol = excluded.rol,
-                            ultimo_acceso = excluded.ultimo_acceso
-                    `,
-                    params: [email, pass, nombreOperario, rolUsuario, fechaAhora]
-                });
-            }
         } catch (errPersist) {
-            console.error("❌ Error al guardar el registro de sesión en base local:", errPersist);
+            console.error("❌ Error al guardar el registro de sesión:", errPersist);
         }
     }
 
@@ -225,7 +287,7 @@ window.m_transicionAInterfazPrincipal = function(usuario, esOffline = false) {
 
     setTimeout(() => {
         if (loginView) loginView.style.display = 'none';
-        if (viewContent) viewContent.style.display = 'block';
+        if (viewContent) viewContent.style.display = 'flex';
         if (headerSistema) headerSistema.style.display = 'flex';
 
         const estadoRed = esOffline ? 'OFFLINE' : 'ONLINE';
@@ -261,14 +323,14 @@ window.m_verificarSesionGuardada = async function() {
         const sesion = res.data[0];
         if (!sesion || !sesion.nombre_usuario) return false;
 
-        console.log("⚡ [Auto-Login] Sesión activa recuperada de base local:", sesion.nombre_usuario);
+        console.log("⚡ [Auto-Login] Sesión activa recuperada:", sesion.nombre_usuario);
 
         const loginView = document.getElementById('login-view');
         const viewContent = document.getElementById('view-content');
         const headerSistema = document.getElementById('header-sistema');
 
         if (loginView) loginView.style.display = 'none';
-        if (viewContent) viewContent.style.display = 'block';
+        if (viewContent) viewContent.style.display = 'flex';
         if (headerSistema) headerSistema.style.display = 'flex';
 
         window.m_pintarHeaderUsuario(sesion.nombre_usuario, sesion.rol, 'LOCAL');
@@ -313,21 +375,18 @@ window.m_renderizarVistaLogin = function() {
         <div class="full-center animated fadeIn">
             <div class="glass-card">
                 <div class="login-header">
-                    <div class="logo-central">
-                        <img src="logo.png" class="img-3x3" alt="Logo Salvucci" onerror="this.onerror=null; this.src='logo_Agrosoft.png';">
+                    <div class="logo-central" style="width: 70px; height: 70px; margin: 0 auto 12px auto; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 14px; background: #FFFFFF; border: 1.5px solid #E0DCD4; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                        <img src="./logo.png" class="img-3x3" alt="Logo Salvucci" onerror="this.onerror=null; this.src='logo_Agrosoft.png';">
                     </div>
                     <h2 class="neon-text">SALVUCCI</h2>
                     <p>Gestión de Operaciones Agropecuarias</p>
-                    <div class="login-badge">
-                        <i data-lucide="shield-check"></i>
-                        ACCESO SEGURO LOCAL-FIRST
-                    </div>
+                    <span class="login-badge"><i data-lucide="shield-check"></i> ACCESO SEGURO LOCAL-FIRST</span>
                 </div>
 
                 <div class="form-group">
                     <div class="input-container">
                         <i data-lucide="user"></i>
-                        <input type="text" id="email" placeholder="Usuario o Correo" autocomplete="username">
+                        <input type="text" id="email" placeholder="Usuario o Email" autocomplete="username">
                     </div>
 
                     <div class="input-container">
