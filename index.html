@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SALVUCCI - Gestión Profesional Offline</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body class="app-theme-light" style="font-family: 'Roboto', sans-serif;">
+
+    <!-- ======================================================= -->
+    <!-- 1. VISTA DE AUTENTICACIÓN / LOGIN                       -->
+    <!-- ======================================================= -->
+    <section id="login-view" class="full-center">
+        <div id="login-card" class="glass-card">
+            <div class="login-header">
+                <div class="logo-central" style="width: 70px; height: 70px; margin: 0 auto 12px auto; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 14px; background: #FFFFFF; border: 1.5px solid #E0DCD4; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                    <img 
+                        src="./logo.png" 
+                        alt="Logo" 
+                        class="img-3x3"
+                        style="width: 100%; height: 100%; object-fit: contain; display: block;"
+                        onerror="this.style.display='none'; document.getElementById('logo-fallback-card').style.display='flex';"
+                    >
+                    <div id="logo-fallback-card" style="display: none; width: 100%; height: 100%; align-items: center; justify-content: center; font-weight: 900; font-size: 0.85rem; color: #1E6B4C;">
+                        SALVUCCI
+                    </div>
+                </div>
+                <h2 class="neon-text">SALVUCCI</h2>
+                <p>Gestión de Operaciones Agropecuarias</p>
+                <span class="login-badge"><i data-lucide="shield-check"></i> ACCESO SEGURO LOCAL-FIRST</span>
+            </div>
+
+            <div class="form-group">
+                <div class="input-container">
+                    <i data-lucide="user"></i>
+                    <input type="text" id="email" placeholder="Usuario o Email" autocomplete="username">
+                </div>
+                <div class="input-container">
+                    <i data-lucide="lock"></i>
+                    <input type="password" id="txt-pass" placeholder="Contraseña de Acceso" autocomplete="current-password">
+                    <button type="button" class="btn-toggle-pass" onclick="m_toggleVerPassword()" title="Mostrar/Ocultar contraseña">
+                        <i data-lucide="eye" id="icon-toggle-pass"></i>
+                    </button>
+                </div>
+            </div>
+
+            <button id="btn-login" class="apple-btn-blue" onclick="m_iniciarSesion()">
+                <span id="btn-login-text">INGRESAR AL SISTEMA</span>
+            </button>
+
+            <div id="login-msg-box" class="login-msg-box" style="display:none;">
+                <i data-lucide="alert-circle" id="login-msg-icon"></i>
+                <span id="login-msg"></span>
+            </div>
+        </div>
+    </section>
+
+    <!-- ======================================================= -->
+    <!-- 2. VISTA PRINCIPAL DEL SISTEMA (DASHBOARD & MÓDULOS)   -->
+    <!-- ======================================================= -->
+    <section id="view-content" style="display: none; min-height: 100vh; flex-direction: column;">
+        
+        <!-- Header superior -->
+        <header id="header-sistema" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 24px; background: #FFFFFF; border-bottom: 1.5px solid #E0DCD4;">
+            <div class="header-left" style="display: flex; align-items: center; gap: 12px;">
+                <div class="logo-container" style="width: 40px; height: 40px; min-width: 40px; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 10px; background: #FFFFFF; border: 1px solid #E0DCD4;">
+                    <img 
+                        src="./logo.png" 
+                        alt="SALVUCCI" 
+                        style="width: 100%; height: 100%; object-fit: contain; display: block;"
+                        onerror="this.style.display='none'; document.getElementById('logo-fallback-hdr').style.display='flex';"
+                    >
+                    <div id="logo-fallback-hdr" style="display: none; width: 100%; height: 100%; align-items: center; justify-content: center; font-weight: 900; font-size: 0.75rem; color: #1E6B4C;">
+                        S
+                    </div>
+                </div>
+
+                <div class="marca-textos">
+                    <div class="marca-nombre" style="font-weight: 900; font-size: 1.1rem; color: #123F2C; letter-spacing: -0.02em;">SALVUCCI</div>
+                    <div class="marca-sub" style="font-size: 0.72rem; color: #6B6255; font-weight: 600;">Gestión de Operaciones Offline</div>
+                </div>
+            </div>
+
+            <div class="header-right" style="display: flex; align-items: center; gap: 16px;">
+                <div id="reloj-sistema" class="reloj-apple" style="font-size: 0.8rem; font-weight: 700; color: #123F2C; letter-spacing: 0.3px; text-transform: uppercase;"></div>
+
+                <div class="usuario-actual" style="display: flex; align-items: center; gap: 12px;">
+                    <div class="datos-usuario" style="text-align: right;">
+                        <div class="nombre" id="hdr-nombre" style="font-size: 0.85rem; font-weight: 700; color: #1D1D1F;">—</div>
+                        <span class="rol-badge" id="hdr-rol" style="font-size: 0.65rem; background: rgba(30, 107, 76, 0.1); color: #1E6B4C; padding: 2px 8px; border-radius: 10px; font-weight: 800; text-transform: uppercase;">—</span>
+                    </div>
+                    <div class="avatar" id="hdr-avatar" style="width: 36px; height: 36px; border-radius: 50%; background: #1E6B4C; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 0.85rem;">—</div>
+
+                    <!-- Botón Sincronizar -->
+                    <button class="btn-sync" id="sync-btn" onclick="sincronizarTodo()" title="Sincronizar todo" style="background: #1E6B4C; color: #FFFFFF; border: none; padding: 8px 14px; border-radius: 8px; font-size: 0.78rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(30,107,76,0.25);">
+                        <i data-lucide="refresh-cw" id="icon-sync" style="width: 14px; height: 14px;"></i>
+                        <span id="txt-sync">Sincronizar</span>
+                    </button>
+
+                    <!-- Botón Logout -->
+                    <button class="btn-logout" id="btn-logout" onclick="m_cerrarSesion()" title="Cerrar sesión" style="background: #F0F2F5; border: 1px solid #E0DCD4; color: #E0342A; width: 34px; height: 34px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center;">
+                        <i data-lucide="log-out" style="width: 15px; height: 15px;"></i>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Contenedor dinámico central -->
+        <div id="layout-app" class="layout-principal" style="flex: 1; width: 100%;">
+            <div class="contenido" style="width: 100%; flex: 1;">
+                <div id="pantalla-dinamica" style="width: 100%;"></div>
+            </div>
+        </div>
+
+        <!-- Footer institucional -->
+        
+    </section>
+
+    <!-- ======================================================= -->
+    <!-- 3. CONFIGURACIÓN SUPABASE & MÓDULOS DEL SISTEMA         -->
+    <!-- ======================================================= -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        const SUPABASE_URL = "https://mvipxeeqfcxsuvwfyetb.supabase.co";
+        const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im12aXB4ZWVxZmN4c3V2d2Z5ZXRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MTMxNTYsImV4cCI6MjA5NDA4OTE1Nn0.EIRa9jEarmqt9rbydbeJWrJYZt842NyJei9MWj8n9mw";
+
+        if (window.supabase && typeof window.supabase.createClient === 'function') {
+            window.supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+            console.log("⚡ [Supabase] Cliente inicializado correctamente.");
+        }
+    </script>
+
+    <!-- Módulos de la aplicación -->
+    <script src="logueo.js"></script>
+    <script src="render.js"></script>
+    <script src="campo/campo.js"></script>
+    <script src="produccion/produccion.js"></script>
+    <script src="produccion/produccion_egreso.js"></script>
+    <script src="produccion/produccion_acopio.js"></script>
+    <script src="produccion/produccion_stock.js"></script>
+    <script src="insumos/insumos_combusitbles.js"></script>
+    <script src="insumos/insumos.js"></script>
+    <script src="insumos/insumos_egresos.js"></script>
+    <script src="insumos/insumos_stock.js"></script>
+    <script src="trabajo/registros.js"></script>
+    <script src="trabajo/registracion_gastos.js"></script>
+    <script src="trabajo/registracion_ordesnTra.js"></script>
+    <script src="trabajo/registracion_labores.js"></script>
+    <script src="ComponentesUI.js"></script>
+    <script src="trabajo/valorizacion.js"></script>
+    <script src="insumos/baja_consumos.js"></script>
+    <script src="trabajo/historial_labores.js"></script>
+    <script src="sincronizacion.js"></script>
+
+    <!-- Reloj en vivo -->
+    <script>
+        function actualizarReloj() {
+            const ahora = new Date();
+            const diasSemana = ['DOMINGO', 'LUNES', 'MARTES', 'MIÉRCOLES', 'JUEVES', 'VIERNES', 'SÁBADO'];
+            const mesesAnio = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
+            const fechaTexto = `${diasSemana[ahora.getDay()]} ${String(ahora.getDate()).padStart(2, '0')} DE ${mesesAnio[ahora.getMonth()]} DE ${ahora.getFullYear()}`;
+            
+            const relojElem = document.getElementById('reloj-sistema');
+            if (relojElem) {
+                relojElem.innerText = fechaTexto;
+            }
+        }
+        setInterval(actualizarReloj, 1000);
+        actualizarReloj();
+        if (window.lucide) lucide.createIcons();
+    </script>
+</body>
+</html>

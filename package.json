@@ -1,0 +1,58 @@
+{
+  "name": "salvucci",
+  "version": "1.0.15",
+  "description": "Sistema de Gestión de Operaciones Salvucci",
+  "main": "main.js",
+  "author": "SOSA JUAN - SISTEMAS INTEGRALES AGROSOFT J&L",
+  "license": "ISC",
+  "scripts": {
+    "start": "electron .",
+    "postinstall": "electron-builder install-app-deps",
+    "pack:fast": "electron-builder --dir",
+    "dist": "electron-builder --win --x64",
+    "dist:win64": "electron-builder --win --x64",
+    "dist:win32": "electron-builder --win --ia32",
+    "dist:mac": "electron-builder --mac" 
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.109.0",
+    "better-sqlite3": "^12.11.1",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
+    "ws": "^8.21.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "electron": "^30.5.1",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.salvucci.app",
+    "productName": "Salvucci",
+    "directories": { "output": "dist" },
+    "files": [ "**/*", "!dist", "!*.db", "!.env", "!node_modules/electron/dist/electron.exe" ],
+    "asar": true,
+    "asarUnpack": [ "node_modules/better-sqlite3/**/*", "**/*.node" ],
+    "npmRebuild": true,
+    "win": {
+      "icon": "logo.ico",
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "logo.ico",
+      "uninstallerIcon": "logo.ico"
+    },
+    "mac": {
+      "icon": "logo.icns",
+      "category": "public.app-category.business",
+      "target": ["dmg"]
+    },
+    "dmg": {
+      "title": "Salvucci Gestión",
+      "icon": "logo.icns"
+    }
+  }
+}
