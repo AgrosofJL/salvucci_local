@@ -4,21 +4,21 @@ on:
   push:
     branches:
       - main
-      - master # Cambialo si tu rama principal tiene otro nombre
-  workflow_dispatch: # Permite ejecutarlo manualmente desde GitHub
+      - master
+  workflow_dispatch:
 
 jobs:
   build-mac:
-    runs-on: macos-latest # Le dice a GitHub que use una Mac virtual
+    runs-on: macos-latest
 
     steps:
       - name: Descargar el código
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Configurar Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: 18 # Versión estable recomendada para Electron
+          node-version: 20
 
       - name: Instalar Dependencias
         run: npm install
@@ -29,7 +29,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Subir Instalador DMG
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Salvucci-Mac-Instalador
           path: dist/*.dmg
