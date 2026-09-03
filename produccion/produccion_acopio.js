@@ -1,8 +1,9 @@
 ﻿/**
- * ModuloAcopio: Control de Almacenamiento, Silos, Galpones y Despachos de Granos/Forrajes
- * AgroSoft J&L - "Apple Soft Studio" Edition / Tipografía Roboto
- * Mode: Local-First (Engine SQLite IPC) + "No me quites nada" + Max(registro)+1 + sincronizado = 0
+ * acopio.js - Gestión de Acopio, Silos y Depósitos con Geolocalización Satelital
+ * Sistema: SALVUCCI / AgroSoft J&L
+ * Lenguaje Visual: Apple Soft Studio / Roboto Font
  */
+
 const ModuloAcopio = {
     datosSilos: [],
     datosProduccion: [],
@@ -12,6 +13,8 @@ const ModuloAcopio = {
     filtroEstablecimiento: '',
     buscadorTexto: '',
     vistaAcopioActual: 'ACTIVOS',        // ACTIVOS | HISTORIAL
+    googleMapsCargado: false,
+    googleApiKey: 'AIzaSyA374dJeJJ-IBirYrb_uTqRH9yrUK2VUaE',
 
     // Helper IPC para ejecutar consultas SQL en la base SQLite local
     m_ejecutarSqlLocal: async function(sql, params = []) {
@@ -153,7 +156,6 @@ const ModuloAcopio = {
                     display: flex; flex-direction: column; gap: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.04);
                 }
 
-                /* CABECERAS FIJAS (STICKY HEADERS) */
                 .wrapper-tabla-scroll-sticky {
                     max-height: calc(100vh - 275px);
                     overflow-y: auto;
@@ -190,7 +192,7 @@ const ModuloAcopio = {
             </style>
 
             <div class="acopio-layout animated fadeIn">
-                ${ComponentesUI.botonVolverHTML('PRODUCCION')}
+                ${typeof ComponentesUI !== 'undefined' && ComponentesUI.botonVolverHTML ? ComponentesUI.botonVolverHTML('PRODUCCION') : ''}
 
                 <!-- HEADER SUPERIOR -->
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; margin-bottom:10px; flex-wrap:wrap; gap:10px;">
@@ -200,6 +202,9 @@ const ModuloAcopio = {
                     </div>
 
                     <div style="display:flex; gap:8px; align-items:center;">
+                        <button onclick="ModuloAcopio.m_abrirModalMapaGlobal()" style="background:#0071E3; color:#FFF; border:none; padding:7px 14px; border-radius:8px; font-size:0.75rem; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:5px; box-shadow:0 3px 8px rgba(0,113,227,0.25);">
+                            <i data-lucide="map-pin" style="width:13px; height:13px;"></i> MAPA SATELITAL
+                        </button>
                         <button onclick="ModuloAcopio.m_exportarExcel()" style="background:#1FA958; color:#FFF; border:none; padding:7px 14px; border-radius:8px; font-size:0.75rem; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:5px;">
                             <i data-lucide="file-spreadsheet" style="width:13px; height:13px;"></i> Excel
                         </button>
@@ -293,6 +298,7 @@ const ModuloAcopio = {
                                     <th class="${this.vistaAcopioActual === 'HISTORIAL' ? 'th-historial' : ''}">Lote Origen</th>
                                     <th class="${this.vistaAcopioActual === 'HISTORIAL' ? 'th-historial' : ''}">Cultivo</th>
                                     <th class="${this.vistaAcopioActual === 'HISTORIAL' ? 'th-historial' : ''}">Campaña</th>
+                                    <th class="${this.vistaAcopioActual === 'HISTORIAL' ? 'th-historial' : ''}">GPS / Coordenadas</th>
                                     <th class="${this.vistaAcopioActual === 'HISTORIAL' ? 'th-historial' : ''}" style="text-align:right;">Kg Brutos</th>
                                     <th class="${this.vistaAcopioActual === 'HISTORIAL' ? 'th-historial' : ''}" style="text-align:right;">Despachados</th>
                                     <th class="${this.vistaAcopioActual === 'HISTORIAL' ? 'th-historial' : ''}" style="text-align:right;">Stock Neto</th>
@@ -316,7 +322,7 @@ const ModuloAcopio = {
             const mensaje = this.vistaAcopioActual === 'HISTORIAL'
                 ? 'No hay registros de acopio totalmente despachados para los filtros seleccionados.'
                 : 'No se encontraron silos o depósitos con stock activo para los filtros seleccionados.';
-            return `<tr><td colspan="9" style="text-align:center; padding:35px; color:#9AA0A6; font-style:italic;">${mensaje}</td></tr>`;
+            return `<tr><td colspan="10" style="text-align:center; padding:35px; color:#9AA0A6; font-style:italic;">${mensaje}</td></tr>`;
         }
 
         return lista.map(s => {
@@ -328,6 +334,12 @@ const ModuloAcopio = {
             const badgeInfra = esSilo
                 ? `<span style="background:rgba(0,113,227,0.1); color:#0071E3; font-weight:800; padding:2px 8px; border-radius:6px; font-size:0.72rem;">⚡ SILO ${s.silo_n}</span>`
                 : `<span style="background:rgba(224,134,0,0.1); color:#E08600; font-weight:800; padding:2px 8px; border-radius:6px; font-size:0.72rem;">📦 ${s.deposito || 'GALPÓN'}</span>`;
+
+            const badgeCoords = s.ubicacion && s.ubicacion.includes(',')
+                ? `<button class="btn-accion-plant" onclick="ModuloAcopio.m_abrirModalMapaGlobal('${s.registro_aco}')" style="background:rgba(0,113,227,0.08); color:#0071E3; border-color:rgba(0,113,227,0.25);" title="Ver en Mapa Satelital">
+                     📍 ${s.ubicacion}
+                   </button>`
+                : `<span style="font-size:0.7rem; color:#8E8E93; font-style:italic;">Sin GPS</span>`;
 
             return `
                 <tr>
@@ -345,6 +357,7 @@ const ModuloAcopio = {
                         <div style="font-size:0.68rem; color:#6B6255;">Var. ${s.variedad || 'S/V'}</div>
                     </td>
                     <td><span style="background:#F0F2F5; color:#1D1D1F; padding:2px 6px; border-radius:4px; font-weight:700; font-size:0.7rem;">${s.campaña || '-'}</span></td>
+                    <td>${badgeCoords}</td>
                     <td style="text-align:right; font-weight:600; font-family:monospace;">${Number(s.kg_en_silo || 0).toLocaleString('es-AR')} Kg</td>
                     <td style="text-align:right; color:#E0342A; font-weight:600; font-family:monospace;">${egresado.toLocaleString('es-AR')} Kg</td>
                     <td style="text-align:right; font-weight:800; color:${esHistorial ? '#6B6255' : '#1E6B4C'}; font-family:monospace; font-size:0.85rem;">
@@ -430,6 +443,29 @@ const ModuloAcopio = {
         this.m_dibujarDashboard();
     },
 
+    // Captura rápida de GPS desde el dispositivo
+    m_capturarGpsActual: function() {
+        const inputCoords = document.getElementById('ac_ubicacion');
+        if (!navigator.geolocation) {
+            alert("La geolocalización no está soportada por su navegador o dispositivo.");
+            return;
+        }
+
+        inputCoords.placeholder = "Obteniendo señal GPS satelital...";
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                const lat = pos.coords.latitude.toFixed(6);
+                const lng = pos.coords.longitude.toFixed(6);
+                inputCoords.value = `${lat}, ${lng}`;
+            },
+            (err) => {
+                alert("No se pudo obtener la posición GPS: " + err.message);
+                inputCoords.placeholder = "-39.123456, -67.123456";
+            },
+            { enableHighAccuracy: true, timeout: 8000 }
+        );
+    },
+
     m_abrirModalAcopioRapido: function(data = null) {
         this.m_asegurarModalBase();
         const modal = document.getElementById('modal-agrosoft');
@@ -463,7 +499,7 @@ const ModuloAcopio = {
                 </div>
 
                 <div style="background: #F8FAFC; border: 1px solid #E0DCD4; padding: 14px; border-radius: 12px; display:flex; flex-direction:column; gap:10px;">
-                    <span style="font-size:0.68rem; font-weight:800; color:#123F2C; text-transform:uppercase; letter-spacing:0.3px;">Destinación Física de Almacenamiento</span>
+                    <span style="font-size:0.68rem; font-weight:800; color:#123F2C; text-transform:uppercase; letter-spacing:0.3px;">Destinación Física y Geolocalización</span>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                         <div>
                             <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Silo N° (Estructura)</label>
@@ -472,6 +508,17 @@ const ModuloAcopio = {
                         <div>
                             <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Ó Depósito / Galpón</label>
                             <input type="text" id="ac_deposito_manual" value="${esEdicion && data.deposito ? data.deposito : ''}" placeholder="Ej: Galpón Norte" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem;" oninput="document.getElementById('ac_silo_manual').value=''">
+                        </div>
+                    </div>
+
+                    <!-- CAMPO COORDENADAS / UBICACIÓN -->
+                    <div>
+                        <label style="font-size:0.65rem; color:#0071E3; font-weight:800; text-transform:uppercase; display:block; margin-bottom:4px;">Coordenadas Satelitales (Latitud, Longitud)</label>
+                        <div style="display:flex; gap:6px;">
+                            <input type="text" id="ac_ubicacion" value="${esEdicion && data.ubicacion ? data.ubicacion : ''}" placeholder="-39.012345, -67.123456" style="flex:1; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; font-family:monospace;">
+                            <button type="button" onclick="ModuloAcopio.m_capturarGpsActual()" style="background:rgba(0,113,227,0.1); border:1px solid rgba(0,113,227,0.25); color:#0071E3; padding:8px 12px; border-radius:8px; font-size:0.75rem; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:4px;">
+                                📍 Obtener GPS
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -571,6 +618,246 @@ const ModuloAcopio = {
         document.getElementById('ac_kilos_final').value = pendiente;
     },
 
+    m_guardarTodo: async function() {
+        const siloNum = document.getElementById('ac_silo_manual').value.trim();
+        const depositoNom = document.getElementById('ac_deposito_manual').value.trim();
+        const ubicacionVal = document.getElementById('ac_ubicacion').value.trim();
+        const kilosNuevos = parseFloat(document.getElementById('ac_kilos_final').value);
+        const densidad = parseFloat(document.getElementById('ac_densidad').value) || 0;
+        const variedad = parseInt(document.getElementById('ac_variedad').value) || null;
+        const rawRegAco = document.getElementById('ac_registro_aco').value;
+        
+        const esEdicion = rawRegAco !== "";
+
+        if (!siloNum && !depositoNom) {
+            return (window.ComponentesUI ? window.ComponentesUI.notifica("⚠️ Asigne un número de Silo o el nombre de un Depósito.") : alert("Asigne infraestructura."));
+        }
+        if (isNaN(kilosNuevos) || kilosNuevos <= 0) {
+            return (window.ComponentesUI ? window.ComponentesUI.notifica("⚠️ Ingrese una cantidad válida de kilos.") : alert("Cantidad inválida."));
+        }
+
+        const btn = document.getElementById('btn-guardar-acopio-local');
+        if (btn) {
+            btn.innerText = "GUARDANDO LOCALMENTE...";
+            btn.disabled = true;
+        }
+
+        const siloExistente = this.datosSilos.find(s => 
+            (siloNum !== "" && s.silo_n == siloNum) || 
+            (depositoNom !== "" && s.deposito == depositoNom)
+        );
+        
+        let nuevoStockBruto = kilosNuevos;
+        if (!esEdicion && siloExistente) {
+            const stockAnterior = Number(siloExistente.kg_en_silo) || 0;
+            nuevoStockBruto = stockAnterior + kilosNuevos;
+        }
+
+        const metrosCalculados = densidad > 0 ? parseFloat((nuevoStockBruto / densidad).toFixed(2)) : 0;
+        
+        try {
+            if (esEdicion) {
+                const sqlUpdate = `
+                    UPDATE acopio_produccion SET
+                        establecimiento = ?, campo = ?, lote = ?, cultivo = ?, variedad = ?,
+                        silo_n = ?, deposito = ?, kg_en_silo = ?, kg_mtr_silo = ?, mtrs_silo = ?,
+                        campaña = ?, ubicacion = ?, sincronizado = 0
+                    WHERE registro_aco = ?
+                `;
+                await this.m_ejecutarSqlLocal(sqlUpdate, [
+                    document.getElementById('ac_estab').value,
+                    document.getElementById('ac_campo').value,
+                    parseInt(document.getElementById('ac_lote').value) || null,
+                    document.getElementById('ac_cultivo').value,
+                    variedad,
+                    siloNum !== "" ? siloNum : null,
+                    depositoNom !== "" ? depositoNom : null,
+                    nuevoStockBruto,
+                    densidad,
+                    metrosCalculados,
+                    document.getElementById('ac_campaña').value,
+                    ubicacionVal || null,
+                    parseInt(rawRegAco)
+                ]);
+            } else if (siloExistente) {
+                const sqlUpdateExistente = `
+                    UPDATE acopio_produccion SET
+                        kg_en_silo = ?, kg_mtr_silo = ?, mtrs_silo = ?, ubicacion = ?, sincronizado = 0
+                    WHERE registro_aco = ?
+                `;
+                await this.m_ejecutarSqlLocal(sqlUpdateExistente, [
+                    nuevoStockBruto,
+                    densidad,
+                    metrosCalculados,
+                    ubicacionVal || siloExistente.ubicacion || null,
+                    siloExistente.registro_aco
+                ]);
+            } else {
+                // Regla Max(registro_aco)+1
+                const resMax = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(registro_aco AS INTEGER)) as max_val FROM acopio_produccion`);
+                const maxVal = (resMax.data && resMax.data[0] && resMax.data[0].max_val) ? Number(resMax.data[0].max_val) : 0;
+                const nuevoID = maxVal + 1;
+
+                const sqlInsert = `
+                    INSERT INTO acopio_produccion (
+                        registro_aco, establecimiento, campo, lote, cultivo, variedad,
+                        silo_n, deposito, kg_en_silo, kg_mtr_silo, mtrs_silo, campaña, ubicacion, sincronizado
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                `;
+                await this.m_ejecutarSqlLocal(sqlInsert, [
+                    nuevoID,
+                    document.getElementById('ac_estab').value,
+                    document.getElementById('ac_campo').value,
+                    parseInt(document.getElementById('ac_lote').value) || null,
+                    document.getElementById('ac_cultivo').value,
+                    variedad,
+                    siloNum !== "" ? siloNum : null,
+                    depositoNom !== "" ? depositoNom : null,
+                    nuevoStockBruto,
+                    densidad,
+                    metrosCalculados,
+                    document.getElementById('ac_campaña').value,
+                    ubicacionVal || null
+                ]);
+            }
+
+            document.getElementById('modal-agrosoft').style.display = 'none';
+            await this.m_inicializar();
+        } catch (err) {
+            console.error("❌ Error al guardar acopio:", err);
+            if (window.ComponentesUI) window.ComponentesUI.notifica("Error al guardar: " + err.message);
+        } finally {
+            if (btn) {
+                btn.innerText = esEdicion ? "ACTUALIZAR ACOPIO" : "REGISTRAR EN ACOPIO";
+                btn.disabled = false;
+            }
+        }
+    },
+
+    // Carga asíncrona segura del SDK de Google Maps
+    m_asegurarGoogleMaps: function() {
+        return new Promise((resolve) => {
+            if (window.google && window.google.maps) {
+                this.googleMapsCargado = true;
+                return resolve(true);
+            }
+            const script = document.createElement('script');
+            script.src = `https://maps.googleapis.com/maps/api/js?key=${this.googleApiKey}&libraries=geometry`;
+            script.async = true;
+            script.onload = () => {
+                this.googleMapsCargado = true;
+                resolve(true);
+            };
+            script.onerror = () => {
+                console.error("No se pudo cargar Google Maps SDK.");
+                resolve(false);
+            };
+            document.head.appendChild(script);
+        });
+    },
+
+    // Modal de visualización Satelital Interactiva
+    m_abrirModalMapaGlobal: async function(idAcopioEnfocar = null) {
+        this.m_asegurarModalBase();
+        const modal = document.getElementById('modal-agrosoft');
+        const container = document.getElementById('modal-formulario');
+        const modalContent = document.querySelector('.modal-apple-content');
+        
+        if (modalContent) modalContent.style.maxWidth = '920px';
+        if (modal) modal.style.display = 'flex';
+        
+        document.getElementById('modal-titulo').innerText = "🗺️ MAPA SATELITAL DE ACOPIOS Y EXISTENCIAS";
+
+        container.innerHTML = `
+            <div style="display:flex; flex-direction:column; gap:10px; font-family:'Roboto', sans-serif;">
+                <div id="contenedor-google-maps" style="width:100%; height:550px; border-radius:12px; border:1.5px solid #E0DCD4; background:#E5E3DF; display:flex; align-items:center; justify-content:center;">
+                    <span style="color:#6B6255; font-size:0.85rem; font-weight:bold;">Cargando vista satelital Google Maps...</span>
+                </div>
+            </div>
+        `;
+
+        const ok = await this.m_asegurarGoogleMaps();
+        if (!ok) {
+            document.getElementById('contenedor-google-maps').innerHTML = `<span style="color:#E0342A; font-weight:bold;">Error de conexión con Google Maps API.</span>`;
+            return;
+        }
+
+        const mapElement = document.getElementById('contenedor-google-maps');
+        const map = new google.maps.Map(mapElement, {
+            zoom: 14,
+            mapTypeId: 'hybrid',
+            center: { lat: -39.0166, lng: -67.1000 },
+            tilt: 0
+        });
+
+        const bounds = new google.maps.LatLngBounds();
+        let totalPines = 0;
+
+        this.datosSilos.forEach(s => {
+            if (!s.ubicacion || !s.ubicacion.includes(',')) return;
+            const partes = s.ubicacion.split(',').map(p => parseFloat(p.trim()));
+            if (isNaN(partes[0]) || isNaN(partes[1])) return;
+
+            const pos = { lat: partes[0], lng: partes[1] };
+            const stockReal = this.m_stockRealDe(s);
+            const esSilo = s.silo_n && String(s.silo_n).trim() !== "";
+            const tituloInfra = esSilo ? `SILO ${s.silo_n}` : `DEPÓSITO: ${s.deposito || 'GALPÓN'}`;
+
+            const marker = new google.maps.Marker({
+                position: pos,
+                map: map,
+                title: `${tituloInfra} (${s.cultivo})`,
+                icon: {
+                    path: google.maps.SymbolPath.CIRCLE,
+                    scale: stockReal > 0 ? 10 : 7,
+                    fillColor: stockReal > 0 ? '#1E6B4C' : '#8E8E93',
+                    fillOpacity: 0.95,
+                    strokeColor: '#FFFFFF',
+                    strokeWeight: 2.5
+                }
+            });
+
+            const contenidoPopup = `
+                <div style="font-family:'Roboto', sans-serif; padding:6px; min-width:210px; color:#1D1D1F;">
+                    <div style="font-size:0.88rem; font-weight:900; color:#123F2C; border-bottom:1px solid #E0DCD4; padding-bottom:4px; margin-bottom:6px;">
+                        ⚡ ${tituloInfra}
+                    </div>
+                    <div style="font-size:0.75rem; color:#6B6255; line-height:1.4;">
+                        <b>Establecimiento:</b> ${s.establecimiento || '-'}<br>
+                        <b>Lote:</b> ${s.lote || '-'} · <b>Cultivo:</b> ${(s.cultivo || '').toUpperCase()}<br>
+                        <b>Stock Neto:</b> <strong style="color:${stockReal > 0 ? '#1E6B4C' : '#E0342A'}; font-size:0.85rem;">${stockReal.toLocaleString('es-AR')} KG</strong>
+                    </div>
+                    ${stockReal > 0 ? `
+                        <div style="display:flex; gap:6px; margin-top:8px; border-top:1px solid #E0DCD4; padding-top:6px;">
+                            <button onclick="ModuloAcopio.m_abrirModalEgresoRapido('${s.registro_aco}')" style="background:#1FA958; color:white; border:none; padding:5px 9px; border-radius:5px; font-size:0.7rem; font-weight:bold; cursor:pointer;">
+                                🚚 Despachar
+                            </button>
+                            <button onclick="ModuloAcopio.m_abrirModalMovimientoRapido('${s.registro_aco}')" style="background:#E08600; color:white; border:none; padding:5px 9px; border-radius:5px; font-size:0.7rem; font-weight:bold; cursor:pointer;">
+                                🔄 Mover
+                            </button>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+
+            const infoWindow = new google.maps.InfoWindow({ content: contenidoPopup });
+            marker.addListener('click', () => infoWindow.open(map, marker));
+
+            bounds.extend(pos);
+            totalPines++;
+
+            if (idAcopioEnfocar && String(s.registro_aco) === String(idAcopioEnfocar)) {
+                map.setCenter(pos);
+                map.setZoom(17);
+                infoWindow.open(map, marker);
+            }
+        });
+
+        if (totalPines > 0 && !idAcopioEnfocar) {
+            map.fitBounds(bounds);
+        }
+    },
+
     m_solicitarBorrado: function(idRegistro) {
         this.m_asegurarModalBase();
         const modal = document.getElementById('modal-agrosoft');
@@ -616,118 +903,6 @@ const ModuloAcopio = {
         } catch (err) {
             console.error("❌ Error en eliminación local de acopio:", err);
             if (window.ComponentesUI) window.ComponentesUI.notifica("Error al eliminar: " + err.message);
-        }
-    },
-
-    m_guardarTodo: async function() {
-        const siloNum = document.getElementById('ac_silo_manual').value.trim();
-        const depositoNom = document.getElementById('ac_deposito_manual').value.trim();
-        const kilosNuevos = parseFloat(document.getElementById('ac_kilos_final').value);
-        const densidad = parseFloat(document.getElementById('ac_densidad').value) || 0;
-        const variedad = parseInt(document.getElementById('ac_variedad').value) || null;
-        const rawRegAco = document.getElementById('ac_registro_aco').value;
-        
-        const esEdicion = rawRegAco !== "";
-
-        if (!siloNum && !depositoNom) {
-            return (window.ComponentesUI ? window.ComponentesUI.notifica("⚠️ Asigne un número de Silo o el nombre de un Depósito.") : alert("Asigne infraestructura."));
-        }
-        if (isNaN(kilosNuevos) || kilosNuevos <= 0) {
-            return (window.ComponentesUI ? window.ComponentesUI.notifica("⚠️ Ingrese una cantidad válida de kilos.") : alert("Cantidad inválida."));
-        }
-
-        const btn = document.getElementById('btn-guardar-acopio-local');
-        if (btn) {
-            btn.innerText = "GUARDANDO LOCALMENTE...";
-            btn.disabled = true;
-        }
-
-        const siloExistente = this.datosSilos.find(s => 
-            (siloNum !== "" && s.silo_n == siloNum) || 
-            (depositoNom !== "" && s.deposito == depositoNom)
-        );
-        
-        let nuevoStockBruto = kilosNuevos;
-        if (!esEdicion && siloExistente) {
-            const stockAnterior = Number(siloExistente.kg_en_silo) || 0;
-            nuevoStockBruto = stockAnterior + kilosNuevos;
-        }
-
-        const metrosCalculados = densidad > 0 ? parseFloat((nuevoStockBruto / densidad).toFixed(2)) : 0;
-        
-        try {
-            if (esEdicion) {
-                const sqlUpdate = `
-                    UPDATE acopio_produccion SET
-                        establecimiento = ?, campo = ?, lote = ?, cultivo = ?, variedad = ?,
-                        silo_n = ?, deposito = ?, kg_en_silo = ?, kg_mtr_silo = ?, mtrs_silo = ?,
-                        campaña = ?, sincronizado = 0
-                    WHERE registro_aco = ?
-                `;
-                await this.m_ejecutarSqlLocal(sqlUpdate, [
-                    document.getElementById('ac_estab').value,
-                    document.getElementById('ac_campo').value,
-                    parseInt(document.getElementById('ac_lote').value) || null,
-                    document.getElementById('ac_cultivo').value,
-                    variedad,
-                    siloNum !== "" ? siloNum : null,
-                    depositoNom !== "" ? depositoNom : null,
-                    nuevoStockBruto,
-                    densidad,
-                    metrosCalculados,
-                    document.getElementById('ac_campaña').value,
-                    parseInt(rawRegAco)
-                ]);
-            } else if (siloExistente) {
-                const sqlUpdateExistente = `
-                    UPDATE acopio_produccion SET
-                        kg_en_silo = ?, kg_mtr_silo = ?, mtrs_silo = ?, sincronizado = 0
-                    WHERE registro_aco = ?
-                `;
-                await this.m_ejecutarSqlLocal(sqlUpdateExistente, [
-                    nuevoStockBruto,
-                    densidad,
-                    metrosCalculados,
-                    siloExistente.registro_aco
-                ]);
-            } else {
-                // Regla Max(registro_aco)+1
-                const resMax = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(registro_aco AS INTEGER)) as max_val FROM acopio_produccion`);
-                const maxVal = (resMax.data && resMax.data[0] && resMax.data[0].max_val) ? Number(resMax.data[0].max_val) : 0;
-                const nuevoID = maxVal + 1;
-
-                const sqlInsert = `
-                    INSERT INTO acopio_produccion (
-                        registro_aco, establecimiento, campo, lote, cultivo, variedad,
-                        silo_n, deposito, kg_en_silo, kg_mtr_silo, mtrs_silo, campaña, sincronizado
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-                `;
-                await this.m_ejecutarSqlLocal(sqlInsert, [
-                    nuevoID,
-                    document.getElementById('ac_estab').value,
-                    document.getElementById('ac_campo').value,
-                    parseInt(document.getElementById('ac_lote').value) || null,
-                    document.getElementById('ac_cultivo').value,
-                    variedad,
-                    siloNum !== "" ? siloNum : null,
-                    depositoNom !== "" ? depositoNom : null,
-                    nuevoStockBruto,
-                    densidad,
-                    metrosCalculados,
-                    document.getElementById('ac_campaña').value
-                ]);
-            }
-
-            document.getElementById('modal-agrosoft').style.display = 'none';
-            await this.m_inicializar();
-        } catch (err) {
-            console.error("❌ Error al guardar acopio:", err);
-            if (window.ComponentesUI) window.ComponentesUI.notifica("Error al guardar: " + err.message);
-        } finally {
-            if (btn) {
-                btn.innerText = esEdicion ? "ACTUALIZAR ACOPIO" : "REGISTRAR EN ACOPIO";
-                btn.disabled = false;
-            }
         }
     },
 
@@ -802,7 +977,6 @@ const ModuloAcopio = {
             const origenSilo = this.datosSilos.find(s => String(s.registro_aco) === String(idOrigen));
             if (!origenSilo) throw new Error("No se localizó el origen.");
             
-            // 1. Descuento en origen
             const nuevoKgOrigen = Number(origenSilo.kg_en_silo) - kgAMover;
             const mtrsOrigenCalculados = origenSilo.kg_mtr_silo > 0 ? parseFloat((nuevoKgOrigen / origenSilo.kg_mtr_silo).toFixed(2)) : 0;
             
@@ -811,7 +985,6 @@ const ModuloAcopio = {
                 [nuevoKgOrigen, mtrsOrigenCalculados, origenSilo.registro_aco]
             );
 
-            // 2. Incremento o creación en destino
             const destinoExistente = this.datosSilos.find(s => 
                 (siloDest !== "" && String(s.silo_n) === String(siloDest)) || 
                 (depDest !== "" && String(s.deposito).trim().toUpperCase() === depDest.trim().toUpperCase())
@@ -834,13 +1007,14 @@ const ModuloAcopio = {
                 const sqlInsertDest = `
                     INSERT INTO acopio_produccion (
                         registro_aco, establecimiento, campo, lote, cultivo, variedad,
-                        silo_n, deposito, kg_en_silo, kg_mtr_silo, mtrs_silo, campaña, sincronizado
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                        silo_n, deposito, kg_en_silo, kg_mtr_silo, mtrs_silo, campaña, ubicacion, sincronizado
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 `;
                 await this.m_ejecutarSqlLocal(sqlInsertDest, [
                     destID, origenSilo.establecimiento, origenSilo.campo, origenSilo.lote,
                     origenSilo.cultivo, origenSilo.variedad, siloDest !== "" ? siloDest : null,
-                    depDest !== "" ? depDest : null, kgAMover, densidadDest, mtrsDest, origenSilo.campaña
+                    depDest !== "" ? depDest : null, kgAMover, densidadDest, mtrsDest, origenSilo.campaña,
+                    origenSilo.ubicacion || null
                 ]);
             }
 
@@ -997,7 +1171,6 @@ const ModuloAcopio = {
             const impTotalArs = kilosADespachar * impUniDolar * factorIva * cotizacion;
             const estabSel = document.getElementById('eg_estab_val').value;
 
-            // Regla Max(id)+1 para egresos_forraje
             const resMax = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(id AS INTEGER)) as max_val FROM egresos_forraje`);
             const maxVal = (resMax.data && resMax.data[0] && resMax.data[0].max_val) ? Number(resMax.data[0].max_val) : 0;
             const nuevoIdEgreso = maxVal + 1;
@@ -1058,7 +1231,7 @@ const ModuloAcopio = {
 
         const headers = [
             "INFRAESTRUCTURA", "REGISTRO ACOPIO", "ESTABLECIMIENTO", "CAMPO", "LOTE",
-            "CULTIVO", "VARIEDAD", "CAMPAÑA", "KG BRUTOS", "KG EGRESADOS", "STOCK NETO (KG)",
+            "CULTIVO", "VARIEDAD", "CAMPAÑA", "COORDENADAS", "KG BRUTOS", "KG EGRESADOS", "STOCK NETO (KG)",
             "DENSIDAD (KG/M)", "METROS SILO"
         ];
         
@@ -1072,7 +1245,7 @@ const ModuloAcopio = {
             const fila = [
                 `"${infra}"`, s.registro_aco, `"${s.establecimiento || ''}"`, `"${s.campo || ''}"`,
                 s.lote || 0, `"${s.cultivo || ''}"`, `"${s.variedad || ''}"`, `"${s.campaña || ''}"`,
-                s.kg_en_silo || 0, egresado, stockReal, s.kg_mtr_silo || 0, s.mtrs_silo || 0
+                `"${s.ubicacion || ''}"`, s.kg_en_silo || 0, egresado, stockReal, s.kg_mtr_silo || 0, s.mtrs_silo || 0
             ];
             csvContent += fila.join(";") + "\n";
         });
@@ -1140,7 +1313,7 @@ const ModuloAcopio = {
                     <thead>
                         <tr>
                             <th>INFRAESTRUCTURA</th><th>ESTABLECIMIENTO</th><th>CAMPO / LOTE</th>
-                            <th>CULTIVO</th><th>CAMPAÑA</th><th style="text-align:right;">BRUTO KG</th>
+                            <th>CULTIVO</th><th>CAMPAÑA</th><th>COORDENADAS</th><th style="text-align:right;">BRUTO KG</th>
                             <th style="text-align:right;">EGRESADO</th><th style="text-align:right;">NETO ACTUAL</th>
                         </tr>
                     </thead>
@@ -1155,6 +1328,7 @@ const ModuloAcopio = {
                                     <td>${s.campo || '-'} · Lote ${s.lote || 0}</td>
                                     <td><strong style="color:#1E6B4C;">${(s.cultivo || '').toUpperCase()}</strong></td>
                                     <td>${s.campaña || '-'}</td>
+                                    <td>${s.ubicacion || 'S/D'}</td>
                                     <td style="text-align:right;">${Number(s.kg_en_silo || 0).toLocaleString('es-AR')}</td>
                                     <td style="text-align:right; color:#E0342A;">${eg.toLocaleString('es-AR')}</td>
                                     <td style="text-align:right; font-weight:800; color:#1E6B4C;">${net.toLocaleString('es-AR')} KG</td>

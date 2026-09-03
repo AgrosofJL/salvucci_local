@@ -197,10 +197,7 @@ const ModuloRegistracion = {
                     <h2 style="margin:0; font-weight:700; font-size:1.5rem; letter-spacing:-0.5px; color:#1D1D1F;">Panel de Registración</h2>
                     <p style="margin:4px 0 0 0; font-size:0.8rem; color:#6E6E73;">Gestión por tarjetas inteligentes (Engine base Local)</p>
                 </div>
-                <!-- ACA ES LO NUEVO: Botón de Sincronización Global -->
-                <button onclick="window.sincronizar_todo && window.sincronizar_todo()" style="background: #0071E3; color: #FFFFFF; border: none; padding: 8px 16px; border-radius: 8px; font-size: 0.78rem; font-weight: 700; cursor: pointer; display:flex; align-items:center; gap:6px; box-shadow: 0 4px 12px rgba(0,113,227,0.25); font-family:'Roboto';" title="Sincronizar todo con la base central">
-                    ⚡ SINCRONIZAR ALL
-                </button>
+
             </div>
 
             <div class="grid-contenedor-apple animated fadeInUp">

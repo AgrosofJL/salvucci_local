@@ -1,19 +1,21 @@
 ﻿/**
- * ModuloInsumos: Ingreso, Control de Depósitos y Catálogo Maestro de Insumos
- * AgroSoft J&L - "Apple Soft Studio" Edition / Tipografía Roboto
- * Mode: Local-First (Engine SQLite IPC) + "No me quites nada" + Max(registro)+1 + sincronizado = 0
+ * insumos.js - Módulo de Control de Insumos y Catálogo Maestro Dinámico
+ * Sistema: SALVUCCI / AgroSoft J&L
+ * Lenguaje Visual: Apple Soft Studio / Roboto Font
+ * Modo: Local-First (Engine SQLite IPC) + Max(reg_local)+1 + sincronizado = 0
  */
+
 const ModuloInsumos = {
     datosIngresos: [],
     parametrosInsumos: [],      // Maestro de la tabla 'insumos'
     listaDepositos: [],
     listaProveedores: [],        // Maestro de la tabla 'proveedores'
     filtroActual: 'TODO',        // Depósito seleccionado
-    filtroDescripcionActual: 'TODO', // Familia / Tipo seleccionado
+    filtroDescripcionActual: 'TODO', // Familia / Rubro seleccionado
     filtroBusquedaTxt: '',
     vistaActualInsumos: 'INGRESOS', // 'INGRESOS' | 'CATALOGO'
 
-    // Helper IPC para ejecutar consultas SQL en la base SQLite local
+    // Helper IPC para ejecutar consultas SQL en la base SQLite local / Adaptador Web
     m_ejecutarSqlLocal: async function(sql, params = []) {
         if (window.apiLocal && window.apiLocal.query) {
             return await window.apiLocal.query({ sql, params });
@@ -109,6 +111,8 @@ const ModuloInsumos = {
     m_cerrarModal: function() {
         const modal = document.getElementById('modal-agrosoft');
         if (modal) modal.style.display = 'none';
+        const modalContent = document.querySelector('.modal-apple-content');
+        if (modalContent) modalContent.style.maxWidth = '820px';
     },
 
     m_inicializar: async function() {
@@ -138,6 +142,8 @@ const ModuloInsumos = {
 
     m_cambiarTabVista: function(vista) {
         this.vistaActualInsumos = vista;
+        this.filtroDescripcionActual = 'TODO';
+        this.filtroBusquedaTxt = '';
         this.m_dibujarEstructura();
     },
 
@@ -146,9 +152,7 @@ const ModuloInsumos = {
         if (!visor) return;
 
         const datos = this.m_obtenerIngresosFiltrados();
-        const totalImportePesos = datos.reduce((acc, curr) => acc + (Number(curr.importe_total) || 0), 0);
-        const totalUnidades = datos.reduce((acc, curr) => acc + (Number(curr.total || curr.cant) || 0), 0);
-        const totalDepositosCount = new Set(this.datosIngresos.map(i => i.campo_depo).filter(Boolean)).size;
+        const catalogoFiltrado = this.m_obtenerCatalogoFiltrado();
         const totalArticulosCatalogo = this.parametrosInsumos.length;
 
         const depositosUnicos = [...new Set(this.datosIngresos.map(i => (i.campo_depo || "SIN ASIGNAR").toUpperCase()).filter(Boolean))].sort();
@@ -187,45 +191,12 @@ const ModuloInsumos = {
                     border-radius: 12px; font-size: 0.68rem; font-weight: 800;
                 }
 
-                .grid-kpi-insumos {
-                    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px;
-                }
-                @media (max-width: 1100px) { .grid-kpi-insumos { grid-template-columns: repeat(2, 1fr); } }
-                @media (max-width: 600px) { .grid-kpi-insumos { grid-template-columns: 1fr; } }
-
-                .kpi-card-ins {
-                    background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 12px; padding: 12px 14px;
-                    display: flex; flex-direction: column; justify-content: space-between; gap: 4px;
-                    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03); transition: transform 0.15s ease, box-shadow 0.15s ease;
-                }
-                .kpi-card-ins:hover { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(0, 0, 0, 0.06); }
-                .kpi-header-row { display: flex; justify-content: space-between; align-items: center; }
-                .kpi-card-ins .kpi-label { font-size: 0.62rem; color: #6B6255; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
-                
-                .kpi-icon-pill {
-                    width: 26px; height: 26px; border-radius: 8px; display: flex;
-                    align-items: center; justify-content: center; flex-shrink: 0;
-                }
-                .kpi-card-ins .kpi-value {
-                    font-size: 1.25rem; font-weight: 800; color: #1D1D1F; margin: 0; line-height: 1.15; letter-spacing: -0.3px;
-                }
-                .kpi-subtext { font-size: 0.68rem; color: #8E8E93; font-weight: 500; margin-top: 2px; display: block; }
-
-                .kpi-card-ins.accent-neutral { border-left: 4px solid #4B4F56; }
-                .kpi-card-ins.accent-neutral .kpi-icon-pill { background: #F0F2F5; color: #4B4F56; }
-                .kpi-card-ins.accent-blue { border-left: 4px solid #0071E3; }
-                .kpi-card-ins.accent-blue .kpi-icon-pill { background: rgba(0, 113, 227, 0.08); color: #0071E3; }
-                .kpi-card-ins.accent-orange { border-left: 4px solid #E08600; }
-                .kpi-card-ins.accent-orange .kpi-icon-pill { background: rgba(224, 134, 0, 0.1); color: #E08600; }
-                .kpi-card-ins.accent-green { border-left: 4px solid #1E6B4C; }
-                .kpi-card-ins.accent-green .kpi-icon-pill { background: rgba(30, 107, 76, 0.1); color: #1E6B4C; }
-
                 .panel-box-plant {
                     background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 14px; padding: 14px;
                     display: flex; flex-direction: column; gap: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.04);
                 }
 
-                /* CABECERAS FIJAS (STICKY HEADERS) */
+                /* CABECERAS FIJAS */
                 .wrapper-tabla-scroll-sticky {
                     max-height: calc(100vh - 275px);
                     overflow-y: auto;
@@ -257,7 +228,7 @@ const ModuloInsumos = {
             </style>
 
             <div class="insumos-layout animated fadeIn">
-                ${ComponentesUI.botonVolverHTML('INSUMOS')}
+                ${typeof ComponentesUI !== 'undefined' && ComponentesUI.botonVolverHTML ? ComponentesUI.botonVolverHTML('INSUMOS') : ''}
 
                 <!-- HEADER SUPERIOR -->
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; margin-bottom:10px; flex-wrap:wrap; gap:10px;">
@@ -289,74 +260,21 @@ const ModuloInsumos = {
                     <div class="tab-main-archivero ${this.vistaActualInsumos === 'CATALOGO' ? 'active' : ''}" onclick="ModuloInsumos.m_cambiarTabVista('CATALOGO')">
                         <i data-lucide="layers" style="width:14px; height:14px;"></i>
                         <span>CATÁLOGO MAESTRO DE ARTÍCULOS</span>
-                        <span class="badge-tab-main" style="background:#E9EBEF; color:#4B4F56;">${totalArticulosCatalogo} Ítems</span>
+                        <span class="badge-tab-main" style="background:#E9EBEF; color:#4B4F56;">${catalogoFiltrado.length} / ${totalArticulosCatalogo} Ítems</span>
                     </div>
                 </div>
 
-                <!-- KPIS PRINCIPALES -->
-                <div class="grid-kpi-insumos">
-                    <div class="card-kpi-ins accent-neutral">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">INGRESOS ASENTADOS</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="inbox" style="width:14px; height:14px;"></i>
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value">${datos.length} <small>Registros</small></h3>
-                            <span class="kpi-subtext">Movimientos de entrada</span>
-                        </div>
-                    </div>
-
-                    <div class="card-kpi-ins accent-green">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">TOTAL FACTURADO ($)</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="banknote" style="width:14px; height:14px;"></i>
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value" style="color:#1E6B4C;">$ ${totalImportePesos.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2})}</h3>
-                            <span class="kpi-subtext">Valorización bruta consolidada</span>
-                        </div>
-                    </div>
-
-                    <div class="card-kpi-ins accent-orange">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">DEPÓSITOS REGISTRADOS</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="warehouse" style="width:14px; height:14px;"></i>
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value" style="color:#E08600;">${totalDepositosCount} <small>Puntos</small></h3>
-                            <span class="kpi-subtext">${totalUnidades.toLocaleString('es-AR')} unidades en stock</span>
-                        </div>
-                    </div>
-
-                    <div class="card-kpi-ins accent-blue">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">CATÁLOGO DE ARTÍCULOS</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="tag" style="width:14px; height:14px;"></i>
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value" style="color:#0071E3;">${totalArticulosCatalogo} <small>Artículos</small></h3>
-                            <span class="kpi-subtext">Fórmulas e insumos base</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- BARRA DE FILTROS RÁPIDOS -->
+                <!-- BARRA DE FILTROS RÁPIDOS DINÁMICA -->
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
                     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                        <input type="text" id="buscador-insumos" placeholder="🔍 Buscar artículo, remito, proveedor..." value="${this.filtroBusquedaTxt}" oninput="ModuloInsumos.m_filtrarBusqueda(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; min-width:200px;">
+                        <input type="text" id="buscador-insumos" placeholder="${this.vistaActualInsumos === 'INGRESOS' ? '🔍 Buscar artículo, remito, proveedor...' : '🔍 Buscar código, rubro, sub-rubro, descripción...'}" value="${this.filtroBusquedaTxt}" oninput="ModuloInsumos.m_filtrarBusqueda(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; min-width:240px;">
                         
-                        <select onchange="ModuloInsumos.m_filtrarPorGrupo(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; font-weight:600; cursor:pointer;">
-                            <option value="TODO">🏢 Todos los Depósitos</option>
-                            ${depositosUnicos.map(d => `<option value="${d}" ${this.filtroActual === d ? 'selected' : ''}>${d}</option>`).join('')}
-                        </select>
+                        ${this.vistaActualInsumos === 'INGRESOS' ? `
+                            <select onchange="ModuloInsumos.m_filtrarPorGrupo(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; font-weight:600; cursor:pointer;">
+                                <option value="TODO">🏢 Todos los Depósitos</option>
+                                ${depositosUnicos.map(d => `<option value="${d}" ${this.filtroActual === d ? 'selected' : ''}>${d}</option>`).join('')}
+                            </select>
+                        ` : ''}
 
                         <select id="select-filtro-tipo" onchange="ModuloInsumos.m_cambiarFiltroDescripcion(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; font-weight:600; cursor:pointer;">
                             ${this.m_renderPillsTipo()}
@@ -372,7 +290,7 @@ const ModuloInsumos = {
 
                 <!-- CONTENEDOR DE TABLAS EJECUTIVAS -->
                 <div class="panel-box-plant">
-                    ${this.vistaActualInsumos === 'INGRESOS' ? this.m_renderMegaTabla(datos) : this.m_renderCatalogoMaestro()}
+                    ${this.vistaActualInsumos === 'INGRESOS' ? this.m_renderMegaTabla(datos) : this.m_renderCatalogoMaestro(catalogoFiltrado)}
                 </div>
             </div>
         `;
@@ -447,7 +365,7 @@ const ModuloInsumos = {
                                             <button class="btn-accion-plant" onclick="ModuloInsumos.m_abrirModalIngreso('${i.reg_local}')" title="Editar ingreso">
                                                 ✏️
                                             </button>
-                                            <button class="btn-accion-plant btn-delete-plant" onclick="ModuloInsumos.m_solicitarBorrado('${i.reg_local}', ${i.id}, '${i.articulo}')" title="Eliminar ingreso">
+                                            <button class="btn-accion-plant btn-delete-plant" onclick="ModuloInsumos.m_solicitarBorrado('${i.reg_local}', ${i.id || 0}, '${i.articulo}')" title="Eliminar ingreso">
                                                 🗑️
                                             </button>
                                         </div>
@@ -461,8 +379,23 @@ const ModuloInsumos = {
         `;
     },
 
-    m_renderCatalogoMaestro: function() {
-        const catalogo = this.parametrosInsumos;
+    m_renderCatalogoMaestro: function(catalogo) {
+        if (!catalogo || catalogo.length === 0) {
+            return `
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <span style="font-size:0.75rem; font-weight:800; color:#4B4F56; text-transform:uppercase; letter-spacing:0.4px;">
+                        🏷️ Catálogo Maestro de Artículos Registrados (0)
+                    </span>
+                    <button onclick="ModuloInsumos.m_abrirModalNuevoArticulo()" class="btn-accion-plant" style="background:#1E6B4C; color:#FFF; border:none; padding:6px 14px; border-radius:6px; font-weight:700;">
+                        + Nuevo Artículo Maestro
+                    </button>
+                </div>
+                <div style="text-align:center; padding:40px; color:#9AA0A6; font-family:'Roboto';">
+                    <p style="margin:0; font-size:0.85rem; font-style:italic;">No se encontraron artículos en el catálogo para los filtros aplicados.</p>
+                </div>
+            `;
+        }
+
         return `
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span style="font-size:0.75rem; font-weight:800; color:#4B4F56; text-transform:uppercase; letter-spacing:0.4px;">
@@ -477,23 +410,42 @@ const ModuloInsumos = {
                 <table class="tabla-cuadros-plant">
                     <thead>
                         <tr>
-                            <th class="th-catalogo">Rubro</th>
-                            <th class="th-catalogo">Sub-Rubro</th>
-                            <th class="th-catalogo">Código / Artículo</th>
+                            <th class="th-catalogo" style="width: 140px;">Rubro</th>
+                            <th class="th-catalogo" style="width: 140px;">Sub-Rubro</th>
+                            <th class="th-catalogo" style="width: 180px;">Código / Artículo</th>
                             <th class="th-catalogo">Descripción Técnica</th>
-                            <th class="th-catalogo" style="text-align:center;">Unidad</th>
+                            <th class="th-catalogo" style="text-align:center; width: 80px;">Unidad</th>
+                            <th class="th-catalogo" style="text-align:center; width: 80px;">Acciones</th>
                         </tr>
                     </thead>
                     <tbody>
-                        ${catalogo.map(art => `
-                            <tr>
-                                <td><strong>${art.rubro || '-'}</strong></td>
-                                <td>${art.sub_rubro || '-'}</td>
-                                <td><strong style="color:#0071E3;">${art.articulo}</strong></td>
-                                <td>${art.descripcion || '-'}</td>
-                                <td style="text-align:center;"><span style="background:#F0F2F5; padding:2px 7px; border-radius:4px; font-weight:700; font-size:0.72rem;">${art.unidad_medida || 'U'}</span></td>
-                            </tr>
-                        `).join('')}
+                        ${catalogo.map(art => {
+                            const subRubroTxt = (art.sub_rubro && art.sub_rubro !== '0' && art.sub_rubro !== 'SIN ASIGNAR') 
+                                ? art.sub_rubro 
+                                : '<i style="color:#8E8E93;">Sin Sub-Rubro</i>';
+
+                            return `
+                                <tr>
+                                    <td><strong>${art.rubro || 'SIN ASIGNAR'}</strong></td>
+                                    <td>${subRubroTxt}</td>
+                                    <td><strong style="color:#0071E3;">${art.articulo}</strong></td>
+                                    <td>${art.descripcion || '-'}</td>
+                                    <td style="text-align:center;">
+                                        <span style="background:#F0F2F5; padding:2px 7px; border-radius:4px; font-weight:700; font-size:0.72rem;">${art.unidad_medida || 'U'}</span>
+                                    </td>
+                                    <td style="text-align: center; white-space:nowrap;">
+                                        <div style="display:inline-flex; gap:4px; align-items:center;">
+                                            <button class="btn-accion-plant" onclick="ModuloInsumos.m_abrirModalNuevoArticulo('${art.reg_local}')" title="Editar ficha técnica y sub-rubro">
+                                                ✏️
+                                            </button>
+                                            <button class="btn-accion-plant btn-delete-plant" onclick="ModuloInsumos.m_solicitarBorradoArticulo('${art.reg_local}', '${art.articulo}')" title="Eliminar artículo maestro">
+                                                🗑️
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            `;
+                        }).join('')}
                     </tbody>
                 </table>
             </div>
@@ -513,21 +465,32 @@ const ModuloInsumos = {
     },
 
     m_renderPillsTipo: function() {
-        let dataset = this.datosIngresos;
-        if (this.filtroActual !== 'TODO') {
-            dataset = dataset.filter(i => (i.campo_depo || "SIN ASIGNAR").toUpperCase() === this.filtroActual.toUpperCase());
+        if (this.vistaActualInsumos === 'INGRESOS') {
+            let dataset = this.datosIngresos;
+            if (this.filtroActual !== 'TODO') {
+                dataset = dataset.filter(i => (i.campo_depo || "SIN ASIGNAR").toUpperCase() === this.filtroActual.toUpperCase());
+            }
+
+            const familias = [...new Set(dataset.map(i => i.descripcion || i.tipo_insumo || 'GENERAL').filter(Boolean))].sort();
+
+            let optionsHtml = `<option value="TODO">📁 Todas las Familias (${dataset.length})</option>`;
+            familias.forEach(f => {
+                const cant = dataset.filter(i => (i.descripcion || i.tipo_insumo || 'GENERAL') === f).length;
+                const selected = this.filtroDescripcionActual === f ? 'selected' : '';
+                optionsHtml += `<option value="${f}" ${selected}>📦 ${f.toUpperCase()} (${cant})</option>`;
+            });
+
+            return optionsHtml;
+        } else {
+            const rubros = [...new Set(this.parametrosInsumos.map(i => i.rubro || 'GENERAL').filter(Boolean))].sort();
+            let optionsHtml = `<option value="TODO">📁 Todos los Rubros (${this.parametrosInsumos.length})</option>`;
+            rubros.forEach(r => {
+                const cant = this.parametrosInsumos.filter(i => (i.rubro || 'GENERAL') === r).length;
+                const selected = this.filtroDescripcionActual === r ? 'selected' : '';
+                optionsHtml += `<option value="${r}" ${selected}>🏷️ ${r.toUpperCase()} (${cant})</option>`;
+            });
+            return optionsHtml;
         }
-
-        const familias = [...new Set(dataset.map(i => i.descripcion || i.tipo_insumo || 'GENERAL').filter(Boolean))].sort();
-
-        let optionsHtml = `<option value="TODO">📁 Todas las Familias (${dataset.length})</option>`;
-        familias.forEach(f => {
-            const cant = dataset.filter(i => (i.descripcion || i.tipo_insumo || 'GENERAL') === f).length;
-            const selected = this.filtroDescripcionActual === f ? 'selected' : '';
-            optionsHtml += `<option value="${f}" ${selected}>📦 ${f.toUpperCase()} (${cant})</option>`;
-        });
-
-        return optionsHtml;
     },
 
     m_cambiarFiltroDescripcion: function(tipoVal) {
@@ -557,6 +520,24 @@ const ModuloInsumos = {
                 const provMatch = (i.proveedor || '').toLowerCase().includes(txt);
                 const descMatch = (i.descripcion || '').toLowerCase().includes(txt);
                 if (!artMatch && !remMatch && !depMatch && !provMatch && !descMatch) return false;
+            }
+            return true;
+        });
+    },
+
+    m_obtenerCatalogoFiltrado: function() {
+        return this.parametrosInsumos.filter(art => {
+            if (this.filtroDescripcionActual !== 'TODO') {
+                const rubro = art.rubro || 'GENERAL';
+                if (rubro.toUpperCase() !== this.filtroDescripcionActual.toUpperCase()) return false;
+            }
+            if (this.filtroBusquedaTxt) {
+                const txt = this.filtroBusquedaTxt.toLowerCase();
+                const artMatch = (art.articulo || '').toLowerCase().includes(txt);
+                const rubroMatch = (art.rubro || '').toLowerCase().includes(txt);
+                const subMatch = (art.sub_rubro || '').toLowerCase().includes(txt);
+                const descMatch = (art.descripcion || '').toLowerCase().includes(txt);
+                if (!artMatch && !rubroMatch && !subMatch && !descMatch) return false;
             }
             return true;
         });
@@ -818,7 +799,6 @@ const ModuloInsumos = {
             }
         };
 
-        document.getElementById('btn-confirmar-proveedor', 'btn_confirmar_proveedor');
         const btnConfProv = document.getElementById('btn_confirmar_proveedor');
         if (btnConfProv) {
             btnConfProv.onclick = async () => {
@@ -859,67 +839,93 @@ const ModuloInsumos = {
         }
     },
 
-    // ESTO LO MODIFIQUE / ACA ES LO NUEVO: Modal blindado con apertura segura y refresco inmediato
-    m_abrirModalNuevoArticulo: function() {
+    /* ACA ES LO NUEVO: Modal de Edición/Alta de Catálogo Maestro con Dropdowns Vinculados entre Rubro y Sub-Rubro + Creación Rápida */
+    m_abrirModalNuevoArticulo: function(regLocalArticulo = null) {
         this.m_asegurarModalBase();
         const modal = document.getElementById('modal-agrosoft');
         const container = document.getElementById('modal-formulario');
         if (!container) return;
 
+        const modalContent = document.querySelector('.modal-apple-content');
+        if (modalContent) modalContent.style.maxWidth = '680px';
+
+        const artExistente = regLocalArticulo 
+            ? this.parametrosInsumos.find(a => String(a.reg_local) === String(regLocalArticulo))
+            : null;
+
         const formOriginal = container.innerHTML;
         if (modal) modal.style.display = 'flex';
 
-        document.getElementById('modal-titulo').innerText = "NUEVO ARTÍCULO MAESTRO";
+        document.getElementById('modal-titulo').innerText = artExistente 
+            ? "EDITAR ARTÍCULO MAESTRO" 
+            : "NUEVO ARTÍCULO MAESTRO";
 
-        const rubrosUnicos = [...new Set(this.parametrosInsumos.map(i => i.rubro).filter(Boolean))].sort();
+        const rubrosUnicos = [...new Set(this.parametrosInsumos.map(i => (i.rubro || '').trim().toUpperCase()).filter(r => r && r !== '0' && r !== 'SIN ASIGNAR'))].sort();
 
         container.innerHTML = `
             <div style="display:flex; flex-direction:column; gap:12px; font-family:'Roboto', sans-serif;">
                 <div style="background:rgba(30,107,76,0.08); border-left:4px solid #1E6B4C; padding:10px 14px; border-radius:8px;">
-                    <strong style="color:#123F2C; font-size:0.85rem;">NUEVO ARTÍCULO MAESTRO</strong>
-                    <p style="font-size:0.72rem; margin:2px 0 0 0; color:#6B6255;">Dé de alta un insumo que todavía no existe en el catálogo maestro.</p>
+                    <strong style="color:#123F2C; font-size:0.85rem;">${artExistente ? 'MODIFICACIÓN TÉCNICA DE CATÁLOGO' : 'NUEVO ARTÍCULO MAESTRO'}</strong>
+                    <p style="font-size:0.72rem; margin:2px 0 0 0; color:#6B6255;">Seleccione o cree los rubros y sub-rubros para organizar el catálogo maestro.</p>
                 </div>
 
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <!-- SELECTOR DE RUBRO -->
                     <div>
-                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Rubro</label>
-                        <input type="text" id="input_nuevo_rubro" list="dl-rubros-nuevo-art" placeholder="Seleccione o escriba rubro" oninput="ModuloInsumos.m_filtrarSubRubrosNuevoArticulo(this.value)" style="text-transform:uppercase; width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
-                        <datalist id="dl-rubros-nuevo-art">${rubrosUnicos.map(r => `<option value="${r}">`).join('')}</datalist>
+                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Rubro Principal</label>
+                        <div style="display:flex; gap:6px;">
+                            <select id="cat_sel_rubro" onchange="ModuloInsumos.m_onRubroCatChange(this.value)" style="flex:1; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; background:#FFFFFF; font-weight:600; cursor:pointer;">
+                                <option value="">Seleccione Rubro...</option>
+                                ${rubrosUnicos.map(r => `<option value="${r}" ${artExistente?.rubro === r ? 'selected' : ''}>🏷️ ${r}</option>`).join('')}
+                            </select>
+                            <button type="button" onclick="ModuloInsumos.m_promptNuevoRubroCat()" title="Agregar nuevo Rubro" style="background:#1E6B4C; color:white; border:none; width:34px; height:34px; border-radius:8px; font-weight:900; font-size:1.1rem; cursor:pointer; flex-shrink:0;">+</button>
+                        </div>
                     </div>
 
+                    <!-- SELECTOR DINÁMICO DE SUB-RUBRO -->
                     <div>
                         <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Sub-Rubro</label>
-                        <input type="text" id="input_nuevo_subrubro" list="dl-subrubros-nuevo-art" placeholder="Seleccione sub-rubro" style="text-transform:uppercase; width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
-                        <datalist id="dl-subrubros-nuevo-art"></datalist>
+                        <div style="display:flex; gap:6px;">
+                            <select id="cat_sel_subrubro" style="flex:1; padding:8px 10px; border-radius:8px; border:1.5px solid #1E6B4C; font-size:0.85rem; background:#FFFFFF; font-weight:600; cursor:pointer;">
+                                <option value="">Esperando selección de rubro...</option>
+                            </select>
+                            <button type="button" onclick="ModuloInsumos.m_promptNuevoSubRubroCat()" title="Agregar nuevo Sub-Rubro" style="background:#1E6B4C; color:white; border:none; width:34px; height:34px; border-radius:8px; font-weight:900; font-size:1.1rem; cursor:pointer; flex-shrink:0;">+</button>
+                        </div>
                     </div>
                 </div>
 
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                     <div>
                         <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Código / Nombre Artículo</label>
-                        <input type="text" id="input_nuevo_art_codigo" placeholder="Ej: FUNG-0012" style="text-transform:uppercase; width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
+                        <input type="text" id="cat_input_codigo" value="${artExistente?.articulo || ''}" placeholder="Ej: FUNG-0012" style="text-transform:uppercase; width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; font-weight:bold; box-sizing:border-box;">
                     </div>
                     <div>
                         <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Unidad de Medida</label>
-                        <input type="text" id="input_nuevo_art_unidad" placeholder="Ej: LTS, KG, U" style="text-transform:uppercase; width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
+                        <input type="text" id="cat_input_unidad" value="${artExistente?.unidad_medida || 'LTS'}" placeholder="Ej: LTS, KG, U" style="text-transform:uppercase; width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
                     </div>
                 </div>
 
                 <div>
                     <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Descripción Técnica</label>
-                    <input type="text" id="input_nuevo_art_desc" placeholder="Ej: FUNGICIDA SISTÉMICO" style="text-transform:uppercase; width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
+                    <input type="text" id="cat_input_desc" value="${artExistente?.descripcion || ''}" placeholder="Detalles de aplicación y formulación" style="text-transform:uppercase; width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
                 </div>
 
                 <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:8px; border-top:1px solid #E0DCD4; padding-top:12px;">
-                    <button type="button" id="btn_cancelar_articulo" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:8px 16px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer;">VOLVER</button>
-                    <button type="button" id="btn_confirmar_articulo" style="background:#1E6B4C; color:#FFFFFF; border:none; padding:8px 18px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer; box-shadow:0 4px 12px rgba(30,107,76,0.25);">REGISTRAR ARTÍCULO</button>
+                    <button type="button" id="btn_cancelar_cat_art" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:8px 16px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer;">VOLVER</button>
+                    <button type="button" id="btn_confirmar_cat_art" style="background:#1E6B4C; color:#FFFFFF; border:none; padding:8px 18px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer; box-shadow:0 4px 12px rgba(30,107,76,0.25);">
+                        ${artExistente ? 'CONFIRMAR CAMBIOS' : 'REGISTRAR ARTÍCULO'}
+                    </button>
                 </div>
             </div>
         `;
 
-        document.getElementById('input_nuevo_rubro')?.focus();
+        if (artExistente?.rubro) {
+            this.m_onRubroCatChange(artExistente.rubro, artExistente.sub_rubro);
+        } else {
+            this.m_onRubroCatChange('', '');
+        }
 
-        document.getElementById('btn_cancelar_articulo').onclick = () => {
+        document.getElementById('btn_cancelar_cat_art').onclick = () => {
             if (this.vistaActualInsumos === 'INGRESOS') {
                 container.innerHTML = formOriginal;
                 this.m_revinculareventosModal();
@@ -928,43 +934,69 @@ const ModuloInsumos = {
             }
         };
 
-        document.getElementById('btn_confirmar_articulo').onclick = async () => {
-            const rubro = document.getElementById('input_nuevo_rubro').value.trim().toUpperCase();
-            const subRubro = document.getElementById('input_nuevo_subrubro').value.trim().toUpperCase();
-            const codigo = document.getElementById('input_nuevo_art_codigo').value.trim().toUpperCase();
-            const unidad = document.getElementById('input_nuevo_art_unidad').value.trim().toUpperCase();
-            const descripcion = document.getElementById('input_nuevo_art_desc').value.trim().toUpperCase();
+        document.getElementById('btn_confirmar_cat_art').onclick = async () => {
+            const rubro = document.getElementById('cat_sel_rubro').value.trim().toUpperCase();
+            const subRubro = document.getElementById('cat_sel_subrubro').value.trim().toUpperCase();
+            const codigo = document.getElementById('cat_input_codigo').value.trim().toUpperCase();
+            const unidad = document.getElementById('cat_input_unidad').value.trim().toUpperCase();
+            const descripcion = document.getElementById('cat_input_desc').value.trim().toUpperCase();
 
-            if (!rubro || !codigo || !descripcion) {
-                this.m_notificarAlerta("Complete al menos rubro, código de artículo y descripción.", 'alerta');
+            if (!codigo) {
+                this.m_notificarAlerta("El código o nombre del artículo es obligatorio.", 'alerta');
                 return;
             }
 
-            if (this.parametrosInsumos.some(i => (i.articulo || '').toUpperCase() === codigo)) {
+            // Validar duplicidad si es un alta nueva
+            if (!artExistente && this.parametrosInsumos.some(i => (i.articulo || '').toUpperCase() === codigo)) {
                 this.m_notificarAlerta("Ya existe un artículo registrado con ese código.", 'alerta');
                 return;
             }
 
             try {
-                const maxVal = await this.m_obtenerMaxRegLocal('insumos');
-                const nuevoRegLocal = String(maxVal + 1);
+                if (artExistente) {
+                    const codigoAnterior = artExistente.articulo;
+                    const sqlUpdate = `
+                        UPDATE insumos 
+                        SET rubro = ?, sub_rubro = ?, articulo = ?, descripcion = ?, unidad_medida = ?, sincronizado = 0 
+                        WHERE reg_local = ?
+                    `;
+                    await this.m_ejecutarSqlLocal(sqlUpdate, [rubro, subRubro, codigo, descripcion, unidad, String(artExistente.reg_local)]);
 
-                const nuevoInsumo = {
-                    reg_local: nuevoRegLocal,
-                    rubro: rubro,
-                    sub_rubro: subRubro,
-                    articulo: codigo,
-                    descripcion: descripcion,
-                    unidad_medida: unidad
-                };
+                    artExistente.rubro = rubro;
+                    artExistente.sub_rubro = subRubro;
+                    artExistente.articulo = codigo;
+                    artExistente.descripcion = descripcion;
+                    artExistente.unidad_medida = unidad;
 
-                const sqlInsert = `INSERT INTO insumos (reg_local, rubro, sub_rubro, articulo, descripcion, unidad_medida, text_labor, sincronizado) VALUES (?, ?, ?, ?, ?, ?, 'SIN USO', 0)`;
-                await this.m_ejecutarSqlLocal(sqlInsert, [
-                    nuevoInsumo.reg_local, nuevoInsumo.rubro, nuevoInsumo.sub_rubro,
-                    nuevoInsumo.articulo, nuevoInsumo.descripcion, nuevoInsumo.unidad_medida
-                ]);
+                    // Si se cambió el nombre del código, se propaga en ingresos y egresos
+                    if (codigoAnterior !== codigo) {
+                        await this.m_ejecutarSqlLocal(`UPDATE insumos_ingresos SET articulo = ?, sincronizado = 0 WHERE UPPER(TRIM(articulo)) = ?`, [codigo, codigoAnterior]);
+                        await this.m_ejecutarSqlLocal(`UPDATE egresos_insumos SET insumo = ?, sincronizado = 0 WHERE UPPER(TRIM(insumo)) = ?`, [codigo, codigoAnterior]);
+                    }
 
-                this.parametrosInsumos.push(nuevoInsumo);
+                    this.m_notificarAlerta("Artículo maestro actualizado en Base Local.", 'exito');
+                } else {
+                    const maxVal = await this.m_obtenerMaxRegLocal('insumos');
+                    const nuevoRegLocal = String(maxVal + 1);
+
+                    const nuevoInsumo = {
+                        reg_local: nuevoRegLocal,
+                        rubro: rubro,
+                        sub_rubro: subRubro,
+                        articulo: codigo,
+                        descripcion: descripcion,
+                        unidad_medida: unidad
+                    };
+
+                    const sqlInsert = `INSERT INTO insumos (reg_local, rubro, sub_rubro, articulo, descripcion, unidad_medida, text_labor, sincronizado) VALUES (?, ?, ?, ?, ?, ?, 'SIN USO', 0)`;
+                    await this.m_ejecutarSqlLocal(sqlInsert, [
+                        nuevoInsumo.reg_local, nuevoInsumo.rubro, nuevoInsumo.sub_rubro,
+                        nuevoInsumo.articulo, nuevoInsumo.descripcion, nuevoInsumo.unidad_medida
+                    ]);
+
+                    this.parametrosInsumos.push(nuevoInsumo);
+                    this.m_notificarAlerta("Nuevo artículo registrado con éxito en Base Local.", 'exito');
+                }
 
                 if (this.vistaActualInsumos === 'INGRESOS') {
                     container.innerHTML = formOriginal;
@@ -981,25 +1013,129 @@ const ModuloInsumos = {
                     this.m_dibujarEstructura();
                 }
 
-                this.m_notificarAlerta("Nuevo artículo registrado con éxito en Base Local.", 'exito');
             } catch (err) {
-                console.error("Error al registrar artículo:", err);
-                this.m_notificarAlerta("Error al registrar artículo local: " + err.message, 'error');
+                console.error("Error al guardar artículo maestro:", err);
+                this.m_notificarAlerta("Error al procesar artículo: " + err.message, 'error');
             }
         };
     },
 
-    m_filtrarSubRubrosNuevoArticulo: function(rubroVal) {
-        const datalist = document.getElementById('dl-subrubros-nuevo-art');
-        if (!datalist) return;
+    /* Filtro dinámico de Sub-Rubros para el modal de Insumos */
+    m_onRubroCatChange: function(rubroVal, subRubroSeleccionado = '') {
+        const selectSub = document.getElementById('cat_sel_subrubro');
+        if (!selectSub) return;
+
         const rubroNorm = (rubroVal || '').trim().toUpperCase();
-        const subRubros = [...new Set(
+
+        if (!rubroNorm) {
+            selectSub.innerHTML = '<option value="">Seleccione un Rubro primero...</option>';
+            return;
+        }
+
+        const subRubrosDelRubro = [...new Set(
             this.parametrosInsumos
                 .filter(i => (i.rubro || '').trim().toUpperCase() === rubroNorm)
-                .map(i => i.sub_rubro)
-                .filter(Boolean)
+                .map(i => (i.sub_rubro || '').trim().toUpperCase())
+                .filter(sr => sr && sr !== '0' && sr !== 'SIN ASIGNAR')
         )].sort();
-        datalist.innerHTML = subRubros.map(sr => `<option value="${sr}">`).join('');
+
+        let optionsHTML = '<option value="">Seleccione Sub-Rubro...</option>';
+        subRubrosDelRubro.forEach(sr => {
+            const isSel = (subRubroSeleccionado && subRubroSeleccionado.toUpperCase() === sr) ? 'selected' : '';
+            optionsHTML += `<option value="${sr}" ${isSel}>📦 ${sr}</option>`;
+        });
+
+        if (subRubroSeleccionado && !subRubrosDelRubro.includes(subRubroSeleccionado.toUpperCase())) {
+            optionsHTML += `<option value="${subRubroSeleccionado.toUpperCase()}" selected>📦 ${subRubroSeleccionado.toUpperCase()}</option>`;
+        }
+
+        selectSub.innerHTML = optionsHTML;
+    },
+
+    /* Crear nuevo Rubro en Catálogo Insumos */
+    m_promptNuevoRubroCat: function() {
+        const nuevo = prompt("Ingrese el nombre del nuevo RUBRO maestro:");
+        if (!nuevo || !nuevo.trim()) return;
+        const nombreRubro = nuevo.trim().toUpperCase();
+
+        const selectRubro = document.getElementById('cat_sel_rubro');
+        if (selectRubro) {
+            const opt = new Option(`🏷️ ${nombreRubro}`, nombreRubro, true, true);
+            selectRubro.add(opt);
+            this.m_onRubroCatChange(nombreRubro, '');
+        }
+    },
+
+    /* Crear nuevo Sub-Rubro en Catálogo Insumos */
+    m_promptNuevoSubRubroCat: function() {
+        const rubroActual = document.getElementById('cat_sel_rubro')?.value;
+        if (!rubroActual) {
+            alert("Primero seleccione o agregue un Rubro.");
+            return;
+        }
+
+        const nuevo = prompt(`Ingrese el nuevo SUB-RUBRO para [${rubroActual}]:`);
+        if (!nuevo || !nuevo.trim()) return;
+        const nombreSub = nuevo.trim().toUpperCase();
+
+        const selectSub = document.getElementById('cat_sel_subrubro');
+        if (selectSub) {
+            const opt = new Option(`📦 ${nombreSub}`, nombreSub, true, true);
+            selectSub.add(opt);
+        }
+    },
+
+    m_solicitarBorradoArticulo: function(reg_local, articulo) {
+        this.m_asegurarModalBase();
+        const modal = document.getElementById('modal-agrosoft');
+        const container = document.getElementById('modal-formulario');
+        const modalContent = document.querySelector('.modal-apple-content');
+        if (modalContent) modalContent.style.maxWidth = '420px';
+
+        document.getElementById('modal-titulo').innerText = "⚠️ ELIMINAR DEL CATÁLOGO";
+
+        container.innerHTML = `
+            <div style="font-family:'Roboto', sans-serif; text-align:center; display:flex; flex-direction:column; gap:14px; padding:10px 5px;">
+                <div style="width:50px; height:50px; background:rgba(224,52,42,0.1); border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto; border:1px solid rgba(224,52,42,0.25);">
+                    <span style="color:#E0342A; font-size:1.5rem; font-weight:bold;">!</span>
+                </div>
+
+                <div>
+                    <h3 style="margin:0; font-size:1.1rem; font-weight:bold; color:#1D1D1F;">¿Desea eliminar este artículo?</h3>
+                    <p style="margin:6px 0 0 0; font-size:0.8rem; color:#6E6E73; line-height:1.4;">
+                        El insumo será removido del catálogo maestro permanente:<br>
+                        <strong style="color:#E0342A; font-size:0.88rem; display:block; margin-top:4px;">${articulo}</strong>
+                    </p>
+                </div>
+
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:8px; border-top:1px solid #E0DCD4; padding-top:14px;">
+                    <button onclick="ModuloInsumos.m_cerrarModal()" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:9px; border-radius:8px; font-weight:bold; font-size:0.78rem; cursor:pointer;">
+                        CANCELAR
+                    </button>
+                    <button id="btn-eliminar-confirmar-art" style="background:#E0342A; color:white; border:none; padding:9px; border-radius:8px; font-weight:bold; font-size:0.78rem; cursor:pointer; box-shadow:0 4px 12px rgba(224,52,42,0.25);">
+                        ELIMINAR AHORA
+                    </button>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('btn-eliminar-confirmar-art').onclick = () => this.m_ejecutarBorradoArticulo(reg_local, articulo);
+        if (modal) modal.style.display = 'flex';
+    },
+
+    m_ejecutarBorradoArticulo: async function(reg_local, articulo) {
+        try {
+            const sqlDelete = `DELETE FROM insumos WHERE reg_local = ? OR articulo = ?`;
+            await this.m_ejecutarSqlLocal(sqlDelete, [String(reg_local), articulo]);
+
+            this.parametrosInsumos = this.parametrosInsumos.filter(a => String(a.reg_local) !== String(reg_local) && a.articulo !== articulo);
+
+            this.m_cerrarModal();
+            this.m_notificarAlerta("Artículo eliminado correctamente del Catálogo Maestro.", 'exito');
+            this.m_dibujarEstructura();
+        } catch (e) {
+            this.m_notificarAlerta("Error al eliminar artículo en Base Local: " + e.message, 'error');
+        }
     },
 
     m_revinculareventosModal: function() {
@@ -1158,123 +1294,208 @@ const ModuloInsumos = {
     },
 
     m_exportarPDF: function() {
-        const datos = this.m_obtenerIngresosFiltrados();
+        const datos = this.vistaActualInsumos === 'INGRESOS' ? this.m_obtenerIngresosFiltrados() : this.m_obtenerCatalogoFiltrado();
         if (datos.length === 0) return alert("No hay registros para emitir el reporte.");
 
-        const totalPesos = datos.reduce((a, c) => a + (Number(c.importe_total) || 0), 0);
-        const totalCant = datos.reduce((a, c) => a + (Number(c.total || c.cant) || 0), 0);
-
         const ventanaImpresion = window.open('', '_blank');
-        ventanaImpresion.document.write(`
-            <html>
-            <head>
-                <title>Salvucci Gestión - Control de Insumos</title>
-                <style>
-                    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&display=swap');
-                    body { font-family: 'Roboto', sans-serif; color: #211C16; padding: 35px; margin: 0; background: #F5F4F1; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-                    .header-pdf-premium { border-bottom: 3px solid #1E6B4C; padding-bottom: 14px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; background:#FFFFFF; padding:18px; border-radius:12px; border:1px solid #E0DCD4; }
-                    .logo-container-apple { width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; margin-right: 15px; }
-                    .logo-container-apple img { width: 100%; height: 100%; object-fit: contain; }
-                    .titulos-reporte h1 { margin: 0; font-size: 18px; font-weight: 900; color: #123F2C; }
-                    .titulos-reporte h2 { margin: 3px 0 0 0; font-size: 11px; color: #1E6B4C; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
-                    .kpi-tile-top { background:rgba(30,107,76,0.08); border:1px solid rgba(30,107,76,0.25); padding:8px 14px; border-radius:8px; text-align:right; }
-                    table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 8px; background:#FFFFFF; border-radius:8px; overflow:hidden; }
-                    th { background: #123F2C; color: #FFFFFF; text-align: left; padding: 8px; font-weight: 700; }
-                    td { padding: 7px 8px; border-bottom: 1px solid #E0DCD4; color: #211C16; }
-                    .footer-firma-fija { margin-top: 30px; border-top: 1px solid #E0DCD4; padding-top: 15px; display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: #6B6255; page-break-inside: avoid; }
-                    @media print { body { background: #FFFFFF; padding: 15px; } }
-                </style>
-            </head>
-            <body>
-                <div class="header-pdf-premium">
-                    <div style="display:flex; align-items:center;">
-                        <div class="logo-container-apple">
-                            <img src="logo.png" onerror="this.style.display='none';" />
+        
+        if (this.vistaActualInsumos === 'INGRESOS') {
+            const totalPesos = datos.reduce((a, c) => a + (Number(c.importe_total) || 0), 0);
+            const totalCant = datos.reduce((a, c) => a + (Number(c.total || c.cant) || 0), 0);
+
+            ventanaImpresion.document.write(`
+                <html>
+                <head>
+                    <title>Salvucci Gestión - Control de Insumos</title>
+                    <style>
+                        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&display=swap');
+                        body { font-family: 'Roboto', sans-serif; color: #211C16; padding: 35px; margin: 0; background: #F5F4F1; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                        .header-pdf-premium { border-bottom: 3px solid #1E6B4C; padding-bottom: 14px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; background:#FFFFFF; padding:18px; border-radius:12px; border:1px solid #E0DCD4; }
+                        .logo-container-apple { width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; margin-right: 15px; }
+                        .logo-container-apple img { width: 100%; height: 100%; object-fit: contain; }
+                        .titulos-reporte h1 { margin: 0; font-size: 18px; font-weight: 900; color: #123F2C; }
+                        .titulos-reporte h2 { margin: 3px 0 0 0; font-size: 11px; color: #1E6B4C; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
+                        .kpi-tile-top { background:rgba(30,107,76,0.08); border:1px solid rgba(30,107,76,0.25); padding:8px 14px; border-radius:8px; text-align:right; }
+                        table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 8px; background:#FFFFFF; border-radius:8px; overflow:hidden; }
+                        th { background: #123F2C; color: #FFFFFF; text-align: left; padding: 8px; font-weight: 700; }
+                        td { padding: 7px 8px; border-bottom: 1px solid #E0DCD4; color: #211C16; }
+                        .footer-firma-fija { margin-top: 30px; border-top: 1px solid #E0DCD4; padding-top: 15px; display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: #6B6255; page-break-inside: avoid; }
+                        @media print { body { background: #FFFFFF; padding: 15px; } }
+                    </style>
+                </head>
+                <body>
+                    <div class="header-pdf-premium">
+                        <div style="display:flex; align-items:center;">
+                            <div class="logo-container-apple">
+                                <img src="logo.png" onerror="this.style.display='none';" />
+                            </div>
+                            <div class="titulos-reporte">
+                                <h2>SALVUCCI GESTIÓN · INSUMOS Y EXISTENCIAS</h2>
+                                <h1>REPORTE GENERAL DE INGRESOS A GALPÓN</h1>
+                            </div>
                         </div>
-                        <div class="titulos-reporte">
-                            <h2>SALVUCCI GESTIÓN · INSUMOS Y EXISTENCIAS</h2>
-                            <h1>REPORTE GENERAL DE INGRESOS A GALPÓN</h1>
+                        <div class="kpi-tile-top">
+                            <div style="font-size:9px; color:#6B6255; font-weight:700; text-transform:uppercase;">Valorización Total</div>
+                            <div style="font-size:16px; font-weight:900; color:#1E6B4C;">$ ${totalPesos.toLocaleString('es-AR', {minimumFractionDigits:2})}</div>
+                            <small style="font-size:9px; color:#6B6255;">Total Stock: ${totalCant.toLocaleString('es-AR')} Unidades</small>
                         </div>
                     </div>
-                    <div class="kpi-tile-top">
-                        <div style="font-size:9px; color:#6B6255; font-weight:700; text-transform:uppercase;">Valorización Total</div>
-                        <div style="font-size:16px; font-weight:900; color:#1E6B4C;">$ ${totalPesos.toLocaleString('es-AR', {minimumFractionDigits:2})}</div>
-                        <small style="font-size:9px; color:#6B6255;">Total Stock: ${totalCant.toLocaleString('es-AR')} Unidades</small>
+
+                    <div style="margin-bottom:8px; font-size:11px; font-weight:800; color:#123F2C; text-transform:uppercase;">
+                        ■ DETALLE DE ENTRADAS A DEPÓSITOS (${datos.length})
                     </div>
-                </div>
 
-                <div style="margin-bottom:8px; font-size:11px; font-weight:800; color:#123F2C; text-transform:uppercase;">
-                    ■ DETALLE DE ENTRADAS A DEPÓSITOS (${datos.length})
-                </div>
-
-                <table>
-                    <thead>
-                        <tr>
-                            <th>FECHA</th><th>REMITO</th><th>DEPÓSITO</th><th>ARTÍCULO</th>
-                            <th>FAMILIA</th><th>PROVEEDOR</th><th style="text-align:right;">CANTIDAD</th>
-                            <th style="text-align:right;">UNIT. U$S</th><th style="text-align:right;">TOTAL ($)</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${datos.map(i => `
+                    <table>
+                        <thead>
                             <tr>
-                                <td><b>${i.fecha || '-'}</b></td>
-                                <td>#${i.remito || 'S/R'}</td>
-                                <td><b>${i.campo_depo || 'S/D'}</b></td>
-                                <td><strong>${i.articulo || '-'}</strong></td>
-                                <td>${i.descripcion || i.tipo_insumo || '-'}</td>
-                                <td>${i.proveedor || '-'}</td>
-                                <td style="text-align:right; font-weight:700; color:#1E6B4C;">${(i.total || i.cant || 0).toLocaleString('es-AR')} ${i.unidad || ''}</td>
-                                <td style="text-align:right;">U$S ${Number(i.imp_uni || 0).toFixed(2)}</td>
-                                <td style="text-align:right; font-weight:800;">$ ${Number(i.importe_total || 0).toLocaleString('es-AR', {minimumFractionDigits:2})}</td>
+                                <th>FECHA</th><th>REMITO</th><th>DEPÓSITO</th><th>ARTÍCULO</th>
+                                <th>FAMILIA</th><th>PROVEEDOR</th><th style="text-align:right;">CANTIDAD</th>
+                                <th style="text-align:right;">UNIT. U$S</th><th style="text-align:right;">TOTAL ($)</th>
                             </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                            ${datos.map(i => `
+                                <tr>
+                                    <td><b>${i.fecha || '-'}</b></td>
+                                    <td>#${i.remito || 'S/R'}</td>
+                                    <td><b>${i.campo_depo || 'S/D'}</b></td>
+                                    <td><strong>${i.articulo || '-'}</strong></td>
+                                    <td>${i.descripcion || i.tipo_insumo || '-'}</td>
+                                    <td>${i.proveedor || '-'}</td>
+                                    <td style="text-align:right; font-weight:700; color:#1E6B4C;">${(i.total || i.cant || 0).toLocaleString('es-AR')} ${i.unidad || ''}</td>
+                                    <td style="text-align:right;">U$S ${Number(i.imp_uni || 0).toFixed(2)}</td>
+                                    <td style="text-align:right; font-weight:800;">$ ${Number(i.importe_total || 0).toLocaleString('es-AR', {minimumFractionDigits:2})}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
 
-                <div class="footer-firma-fija">
-                    <span>Salvucci Gestión &bull; Control de Insumos y Almacenamiento</span>
-                    <span style="font-weight:bold;">Firma Responsable Depósito: ___________________________</span>
-                </div>
+                    <div class="footer-firma-fija">
+                        <span>Salvucci Gestión &bull; Control de Insumos y Almacenamiento</span>
+                        <span style="font-weight:bold;">Firma Responsable Depósito: ___________________________</span>
+                    </div>
 
-                <script>
-                    window.onload = function() { setTimeout(() => { window.print(); window.close(); }, 300); }
-                </script>
-            </body>
-            </html>
-        `);
+                    <script>
+                        window.onload = function() { setTimeout(() => { window.print(); window.close(); }, 300); }
+                    </script>
+                </body>
+                </html>
+            `);
+        } else {
+            ventanaImpresion.document.write(`
+                <html>
+                <head>
+                    <title>Salvucci Gestión - Catálogo Maestro</title>
+                    <style>
+                        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&display=swap');
+                        body { font-family: 'Roboto', sans-serif; color: #211C16; padding: 35px; margin: 0; background: #F5F4F1; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                        .header-pdf-premium { border-bottom: 3px solid #4B4F56; padding-bottom: 14px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; background:#FFFFFF; padding:18px; border-radius:12px; border:1px solid #E0DCD4; }
+                        .logo-container-apple { width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; margin-right: 15px; }
+                        .logo-container-apple img { width: 100%; height: 100%; object-fit: contain; }
+                        .titulos-reporte h1 { margin: 0; font-size: 18px; font-weight: 900; color: #1D1D1F; }
+                        .titulos-reporte h2 { margin: 3px 0 0 0; font-size: 11px; color: #4B4F56; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
+                        table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 8px; background:#FFFFFF; border-radius:8px; overflow:hidden; }
+                        th { background: #4B4F56; color: #FFFFFF; text-align: left; padding: 8px; font-weight: 700; }
+                        td { padding: 7px 8px; border-bottom: 1px solid #E0DCD4; color: #211C16; }
+                        @media print { body { background: #FFFFFF; padding: 15px; } }
+                    </style>
+                </head>
+                <body>
+                    <div class="header-pdf-premium">
+                        <div style="display:flex; align-items:center;">
+                            <div class="logo-container-apple">
+                                <img src="logo.png" onerror="this.style.display='none';" />
+                            </div>
+                            <div class="titulos-reporte">
+                                <h2>SALVUCCI GESTIÓN · INSUMOS Y EXISTENCIAS</h2>
+                                <h1>CATÁLOGO MAESTRO DE ARTÍCULOS</h1>
+                            </div>
+                        </div>
+                    </div>
+
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>RUBRO</th><th>SUB-RUBRO</th><th>CÓDIGO / ARTÍCULO</th>
+                                <th>DESCRIPCIÓN TÉCNICA</th><th style="text-align:center;">UNIDAD</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${datos.map(art => `
+                                <tr>
+                                    <td><b>${art.rubro || '-'}</b></td>
+                                    <td>${art.sub_rubro || '-'}</td>
+                                    <td><strong>${art.articulo}</strong></td>
+                                    <td>${art.descripcion || '-'}</td>
+                                    <td style="text-align:center;"><b>${art.unidad_medida || 'U'}</b></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+
+                    <script>
+                        window.onload = function() { setTimeout(() => { window.print(); window.close(); }, 300); }
+                    </script>
+                </body>
+                </html>
+            `);
+        }
         ventanaImpresion.document.close();
     },
 
     m_exportarExcel: function() {
-        const datos = this.m_obtenerIngresosFiltrados();
-        if (datos.length === 0) return alert("No hay registros para exportar.");
+        if (this.vistaActualInsumos === 'INGRESOS') {
+            const datos = this.m_obtenerIngresosFiltrados();
+            if (datos.length === 0) return alert("No hay registros para exportar.");
 
-        const headers = [
-            "REG. LOCAL", "FECHA", "REMITO", "DEPÓSITO", "LOCALIDAD", "ARTÍCULO",
-            "FAMILIA", "UNIDAD", "PROVEEDOR", "RECIBIÓ", "CANT. ENVASES", "ENV. X",
-            "STOCK TOTAL", "COSTO UNIT U$S", "IMPORTE TOTAL ($)"
-        ];
-
-        let csvContent = "\uFEFF" + headers.join(";") + "\n";
-
-        datos.forEach(i => {
-            const fila = [
-                i.reg_local || '', i.fecha || '', i.remito || '', `"${i.campo_depo || ''}"`,
-                `"${i.localidad || ''}"`, `"${i.articulo || ''}"`, `"${i.descripcion || i.tipo_insumo || ''}"`,
-                `"${i.unidad || ''}"`, `"${i.proveedor || ''}"`, `"${i.recibio || ''}"`,
-                i.cant || 0, i.envase_x || 1, i.total || 0, i.imp_uni || 0, i.importe_total || 0
+            const headers = [
+                "REG. LOCAL", "FECHA", "REMITO", "DEPÓSITO", "LOCALIDAD", "ARTÍCULO",
+                "FAMILIA", "UNIDAD", "PROVEEDOR", "RECIBIÓ", "CANT. ENVASES", "ENV. X",
+                "STOCK TOTAL", "COSTO UNIT U$S", "IMPORTE TOTAL ($)"
             ];
-            csvContent += fila.join(";") + "\n";
-        });
 
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.setAttribute("download", `Salvucci_Ingresos_Insumos_${Date.now()}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+            let csvContent = "\uFEFF" + headers.join(";") + "\n";
+
+            datos.forEach(i => {
+                const fila = [
+                    i.reg_local || '', i.fecha || '', i.remito || '', `"${i.campo_depo || ''}"`,
+                    `"${i.localidad || ''}"`, `"${i.articulo || ''}"`, `"${i.descripcion || i.tipo_insumo || ''}"`,
+                    `"${i.unidad || ''}"`, `"${i.proveedor || ''}"`, `"${i.recibio || ''}"`,
+                    i.cant || 0, i.envase_x || 1, i.total || 0, i.imp_uni || 0, i.importe_total || 0
+                ];
+                csvContent += fila.join(";") + "\n";
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.setAttribute("download", `Salvucci_Ingresos_Insumos_${Date.now()}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        } else {
+            const datos = this.m_obtenerCatalogoFiltrado();
+            if (datos.length === 0) return alert("No hay artículos en catálogo para exportar.");
+
+            const headers = ["REG. LOCAL", "RUBRO", "SUB-RUBRO", "ARTÍCULO", "DESCRIPCIÓN TÉCNICA", "UNIDAD DE MEDIDA"];
+            let csvContent = "\uFEFF" + headers.join(";") + "\n";
+
+            datos.forEach(art => {
+                const fila = [
+                    art.reg_local || '', `"${art.rubro || ''}"`, `"${art.sub_rubro || ''}"`,
+                    `"${art.articulo || ''}"`, `"${art.descripcion || ''}"`, `"${art.unidad_medida || 'U'}"`
+                ];
+                csvContent += fila.join(";") + "\n";
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.setAttribute("download", `Salvucci_Catalogo_Insumos_${Date.now()}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
     }
 };
 

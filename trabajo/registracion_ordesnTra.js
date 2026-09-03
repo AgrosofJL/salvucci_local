@@ -422,9 +422,6 @@ const ModuloOrdenes = {
                         <button onclick="ModuloOrdenes.m_exportarPDFGlobal()" style="background: #E0342A; color: #FFFFFF; border: none; padding: 7px 14px; border-radius: 8px; font-size: 0.75rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 5px;">
                             <i data-lucide="file-text" style="width:13px; height:13px;"></i> PDF Reporte
                         </button>
-                        <button onclick="window.sincronizar_todo && window.sincronizar_todo()" style="background: #0071E3; color: #FFFFFF; border: none; padding: 7px 14px; border-radius: 8px; font-size: 0.75rem; font-weight: 700; cursor: pointer; display:flex; align-items:center; gap:5px;" title="Sincronizar con base central">
-                            <i data-lucide="refresh-cw" style="width:13px; height:13px;"></i> SINCRONIZAR ALL
-                        </button>
                         <button onclick="ModuloOrdenes.m_abrirFormulario()" style="background: #1E6B4C; color: #FFFFFF; border: none; padding: 7px 16px; border-radius: 8px; font-size: 0.75rem; font-weight: 700; cursor: pointer; display:flex; align-items:center; gap:6px;">
                             <i data-lucide="plus-circle" style="width:13px; height:13px;"></i> NUEVA RECETA
                         </button>
@@ -1345,7 +1342,8 @@ const ModuloOrdenes = {
             this.m_asegurarModalBase();
 
             const modalContent = document.querySelector('.modal-apple-content');
-            if (modalContent) modalContent.style.maxWidth = '920px';
+            // Ancho optimizado para eliminar espacios vacíos innecesarios
+            if (modalContent) modalContent.style.maxWidth = '780px';
 
             this.lotesSeleccionados = [];
             const container = document.getElementById('modal-formulario');
@@ -1360,16 +1358,61 @@ const ModuloOrdenes = {
 
             if (container) {
                 container.innerHTML = `
-                    <div style="display:flex; flex-direction:column; gap:12px; font-family:'Roboto', sans-serif;">
-                        <div class="tabs-header-archivero-main" style="margin-bottom:8px;">
-                            <div class="tab-main-archivero active" data-tab="1" onclick="ModuloOrdenes.m_cambiarTabReceta(1)"><span>1. DATOS GENERALES</span></div>
-                            <div class="tab-main-archivero" data-tab="2" onclick="ModuloOrdenes.m_cambiarTabReceta(2)"><span>2. RECETA DE INSUMOS</span> <span class="badge-tab-main" id="tab-badge-insumos">0</span></div>
-                            <div class="tab-main-archivero" data-tab="3" onclick="ModuloOrdenes.m_cambiarTabReceta(3)"><span>3. APLICACIÓN Y COSTOS</span></div>
+                    <style>
+                        /* Solapas tipo archivero con acentos cromáticos */
+                        .tabs-header-archivero-receta {
+                            display: flex; gap: 8px; border-bottom: 2px solid #E0DCD4; margin-bottom: 12px; align-items: flex-end;
+                        }
+                        .tab-receta-arch {
+                            display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: #EAE8E1;
+                            border: 1.5px solid #E0DCD4; border-bottom: none; border-radius: 10px 10px 0 0;
+                            font-size: 0.78rem; font-weight: 800; color: #6B6255; cursor: pointer; transition: all 0.15s ease;
+                            position: relative; bottom: -2px;
+                        }
+                        .tab-receta-arch:hover { background: #F0EEE8; color: #1D1D1F; }
+                        
+                        /* Colores dinámicos por paso */
+                        .tab-receta-arch.active[data-tab="1"] {
+                            background: #FFFFFF; color: #0071E3; border-top: 3px solid #0071E3; box-shadow: 0 -2px 6px rgba(0,113,227,0.08);
+                        }
+                        .tab-receta-arch.active[data-tab="2"] {
+                            background: #FFFFFF; color: #1E6B4C; border-top: 3px solid #1E6B4C; box-shadow: 0 -2px 6px rgba(30,107,76,0.08);
+                        }
+                        .tab-receta-arch.active[data-tab="3"] {
+                            background: #FFFFFF; color: #E08600; border-top: 3px solid #E08600; box-shadow: 0 -2px 6px rgba(224,134,0,0.08);
+                        }
+
+                        .badge-tab-receta {
+                            padding: 2px 7px; border-radius: 12px; font-size: 0.65rem; font-weight: 800;
+                        }
+
+                        .input-filtro-ot {
+                            width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid #E0DCD4;
+                            font-size: 0.8rem; background: #FFFFFF; color: #1D1D1F; outline: none; font-family: 'Roboto', sans-serif;
+                            box-sizing: border-box; transition: border-color 0.2s ease;
+                        }
+                        .input-filtro-ot:focus { border-color: #1E6B4C; }
+                    </style>
+
+                    <div style="display:flex; flex-direction:column; gap:10px; font-family:'Roboto', sans-serif;">
+                        
+                        <!-- SOLAPAS TIPO ARCHIVERO CON COLORES VIVOS -->
+                        <div class="tabs-header-archivero-receta">
+                            <div class="tab-receta-arch active" data-tab="1" onclick="ModuloOrdenes.m_cambiarTabReceta(1)">
+                                <span>📋 1. DATOS GENERALES</span>
+                            </div>
+                            <div class="tab-receta-arch" data-tab="2" onclick="ModuloOrdenes.m_cambiarTabReceta(2)">
+                                <span>🧪 2. RECETA DE INSUMOS</span> 
+                                <span class="badge-tab-receta" id="tab-badge-insumos" style="background:rgba(30,107,76,0.12); color:#1E6B4C;">0</span>
+                            </div>
+                            <div class="tab-receta-arch" data-tab="3" onclick="ModuloOrdenes.m_cambiarTabReceta(3)">
+                                <span>🚜 3. APLICACIÓN Y COSTOS</span>
+                            </div>
                         </div>
 
-                        <div class="panel-box-plant" style="padding:14px;">
+                        <div class="panel-box-plant" style="padding:14px; background:#FFFFFF; border:1.5px solid #E0DCD4; border-radius:12px; box-shadow:0 2px 5px rgba(0,0,0,0.03);">
 
-                            <!-- PASO 1 -->
+                            <!-- PASO 1: DATOS GENERALES -->
                             <div class="tab-panel-receta activo" data-panel="1">
                                 <div style="display:grid; grid-template-columns: repeat(12, 1fr); gap: 10px;">
                                     <div style="grid-column: span 6;">
@@ -1379,18 +1422,30 @@ const ModuloOrdenes = {
                                             ${rubrosUnicos.map(r => `<option value="${r}">${r}</option>`).join('')}
                                         </select>
                                     </div>
-                                    <div style="grid-column: span 6;"><label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Tipo Labor</label><select id="rec_tipo_app" class="input-filtro-ot"><option value="">Seleccione Rubro...</option></select></div>
+                                    
+                                    <!-- DROP TIPO LABOR CON BOTÓN AGREGAR '+' -->
+                                    <div style="grid-column: span 6;">
+                                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Tipo Labor</label>
+                                        <div style="display:flex; gap:6px;">
+                                            <select id="rec_tipo_app" class="input-filtro-ot" style="flex:1;">
+                                                <option value="">Seleccione Rubro primero...</option>
+                                            </select>
+                                            <button type="button" onclick="ModuloOrdenes.m_modalNuevaLabor()" title="Crear nueva labor en este rubro" style="background:#1E6B4C; color:white; border:none; width:33px; height:33px; border-radius:8px; font-weight:900; font-size:1.1rem; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                                                +
+                                            </button>
+                                        </div>
+                                    </div>
 
-                                    <div style="grid-column: span 3;"><label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Orden Trabajo</label><input type="number" id="rec_orden_cab" placeholder="4500" class="input-filtro-ot" style="font-weight:700; color:#0071E3;"></div>
+                                    <div style="grid-column: span 3;"><label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Orden Trabajo</label><input type="number" id="rec_orden_cab" placeholder="4500" class="input-filtro-ot" style="font-weight:800; color:#0071E3;"></div>
                                     <div style="grid-column: span 3;"><label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Ref Orden</label><input type="number" id="rec_ref_orden" placeholder="102" class="input-filtro-ot"></div>
                                     <div style="grid-column: span 3;"><label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Fecha Planificación</label><input type="date" id="rec_fecha" value="${new Date().toISOString().split('T')[0]}" class="input-filtro-ot"></div>
-                                    <div style="grid-column: span 3;"><label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Estado Aplicación</label><select id="rec_estado" class="input-filtro-ot" style="font-weight:700; color:#E08600;"><option value="PENDIENTE">⏳ PENDIENTE</option><option value="EN PROCESO">🚜 EN PROCESO</option><option value="TERMINADO">✅ TERMINADO</option></select></div>
+                                    <div style="grid-column: span 3;"><label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Estado</label><select id="rec_estado" class="input-filtro-ot" style="font-weight:700; color:#E08600;"><option value="PENDIENTE">⏳ PENDIENTE</option><option value="EN PROCESO">🚜 EN PROCESO</option><option value="TERMINADO">✅ TERMINADO</option></select></div>
 
                                     <div style="grid-column: span 6;"><label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Establecimiento</label><select id="rec_est" onchange="ModuloOrdenes.m_filtrarCampos(this.value)" class="input-filtro-ot"><option value="">Seleccione...</option>${estUnicos.map(e => `<option value="${e}">${e}</option>`).join('')}</select></div>
                                     <div style="grid-column: span 6;"><label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Campo / Sector</label><select id="rec_campo" onchange="ModuloOrdenes.m_filtrarLotes(this.value)" class="input-filtro-ot"><option value="">-</option></select></div>
 
                                     <div style="grid-column: span 4;"><label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Añadir Cuadro / Lote</label><select id="rec_cuadro" onchange="ModuloOrdenes.m_agregarLoteALista(this.value)" class="input-filtro-ot"><option value="">Seleccione...</option></select></div>
-                                    <div style="grid-column: span 4;"><label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Superficie Cobertura (Ha)</label><input type="number" id="rec_sup" placeholder="0.00" readonly class="input-filtro-ot" style="font-weight:800; color:#1E6B4C;"></div>
+                                    <div style="grid-column: span 4;"><label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Superficie Cobertura (Ha)</label><input type="number" id="rec_sup" placeholder="0.00" readonly class="input-filtro-ot" style="font-weight:800; color:#1E6B4C; background:#F8FAFC;"></div>
                                     <div style="grid-column: span 4;"><label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Cotización Divisa ($)</label><input type="number" id="rec_cot" value="1200" oninput="ModuloOrdenes.m_recalcularTodo()" class="input-filtro-ot"></div>
 
                                     <div style="grid-column: span 12; margin-top: 4px;">
@@ -1400,15 +1455,15 @@ const ModuloOrdenes = {
                                 </div>
                             </div>
 
-                            <!-- PASO 2 -->
+                            <!-- PASO 2: INSUMOS -->
                             <div class="tab-panel-receta" data-panel="2" style="display:none;">
                                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                                     <span style="font-size:0.68rem; font-weight:800; color:#123F2C; letter-spacing:0.4px; text-transform: uppercase;">Insumos e Ingredientes Activos</span>
-                                    <button type="button" onclick="ModuloOrdenes.m_agregarFilaProducto()" class="btn-accion-plant">
+                                    <button type="button" onclick="ModuloOrdenes.m_agregarFilaProducto()" class="btn-accion-plant" style="background:rgba(30,107,76,0.1); border:1px solid rgba(30,107,76,0.25); color:#1E6B4C; font-weight:bold; padding:4px 10px; border-radius:6px; cursor:pointer;">
                                         + Agregar Insumo
                                     </button>
                                 </div>
-                                <div class="producto-row-header">
+                                <div class="producto-row-header" style="display:grid; grid-template-columns: 140px 1fr 90px 90px 85px 85px 30px; gap:6px; font-size:0.65rem; font-weight:bold; color:#6B6255; text-transform:uppercase; padding:4px 0;">
                                     <span>Depósito Origen</span>
                                     <span>Insumo</span>
                                     <span>Dosis/Ha</span>
@@ -1417,17 +1472,17 @@ const ModuloOrdenes = {
                                     <span>Total U$S</span>
                                     <span></span>
                                 </div>
-                                <div id="contenedor-productos"></div>
+                                <div id="contenedor-productos" style="display:flex; flex-direction:column; gap:6px;"></div>
                                 <div id="vista-previa-insumos" style="background: #F8FAFC; border-radius: 8px; padding: 10px; border: 1px dashed #E0DCD4; margin-top: 8px;">
                                     <span style="color:#6B6255; font-size:0.75rem; font-style:italic;">Cargue insumos para ver el detalle de consumo...</span>
                                 </div>
                             </div>
 
-                            <!-- PASO 3 -->
+                            <!-- PASO 3: APLICACIÓN Y COSTOS -->
                             <div class="tab-panel-receta" data-panel="3" style="display:none;">
                                 <div style="display:grid; grid-template-columns: repeat(12, 1fr); gap: 10px;">
-                                    <label style="grid-column: span 12; display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                                        <input type="checkbox" id="check_apoyo" onchange="ModuloOrdenes.m_toggleApoyo(this.checked)">
+                                    <label style="grid-column: span 12; display: flex; align-items: center; gap: 8px; cursor: pointer; background:rgba(30,107,76,0.06); padding:8px 12px; border-radius:8px; border:1px solid rgba(30,107,76,0.15);">
+                                        <input type="checkbox" id="check_apoyo" onchange="ModuloOrdenes.m_toggleApoyo(this.checked)" style="accent-color:#1E6B4C; width:15px; height:15px;">
                                         <span style="font-size:0.75rem; font-weight:800; color:#1E6B4C;">¿REQUIERE APOYO / LOGÍSTICA DE CARGA?</span>
                                     </label>
 
@@ -1443,7 +1498,8 @@ const ModuloOrdenes = {
                             </div>
                         </div>
 
-                        <div style="background: rgba(30,107,76,0.08); border:1px solid rgba(30,107,76,0.25); border-radius:10px; padding:10px 14px; display:flex; justify-content:space-between; align-items:center;">
+                        <!-- TOTALIZADOR Y BOTONES DE ACCIÓN -->
+                        <div style="background: rgba(30,107,76,0.08); border:1px solid rgba(30,107,76,0.25); border-radius:10px; padding:8px 14px; display:flex; justify-content:space-between; align-items:center;">
                             <span style="font-size:0.75rem; font-weight:800; color:#123F2C; text-transform:uppercase; letter-spacing:0.4px;">Costo Total Liquidado de Operación</span>
                             <input type="number" id="rec_total_todo" readonly style="border:none; background:transparent; color:#1E6B4C; font-weight:900; font-size:1.3rem; text-align:right; width:180px; font-family:'Roboto';">
                         </div>
@@ -1464,6 +1520,105 @@ const ModuloOrdenes = {
             this.m_agregarFilaProducto();
             document.getElementById('modal-agrosoft').style.display = 'flex';
         }, 10);
+    },
+
+    /* =========================================================================
+     * FUNCIÓN PARA DAR DE ALTA UNA NUEVA LABOR DIRECTO EN SQLite LOCAL (tipos_labores)
+     * ========================================================================= */
+    m_modalNuevaLabor: function() {
+        const container = document.getElementById('modal-formulario');
+        if (!container) return;
+        const contenidoPrevio = container.innerHTML;
+
+        const rubroActual = document.getElementById('rec_rubro')?.value || '';
+        const rubrosUnicos = [...new Set(this.parametros.labores.map(l => l.rubro).filter(Boolean))];
+
+        container.innerHTML = `
+            <div style="display:flex; flex-direction:column; gap:12px; font-family:'Roboto', sans-serif; padding:6px;">
+                <div style="background:rgba(30,107,76,0.08); border-left:4px solid #1E6B4C; padding:12px 14px; border-radius:8px;">
+                    <strong style="color:#123F2C; font-size:0.88rem;">ALTA DE NUEVA LABOR TÉCNICA</strong>
+                    <p style="font-size:0.75rem; margin:3px 0 0 0; color:#6B6255;">El registro se guardará directamente en la tabla maestra <b>tipos_labores</b>.</p>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div>
+                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Rubro Operativo</label>
+                        <input type="text" id="nl_rubro" list="dl-rubros-nueva-labor" value="${rubroActual}" placeholder="Ej: PULVERIZACIÓN" style="text-transform:uppercase; width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
+                        <datalist id="dl-rubros-nueva-labor">${rubrosUnicos.map(r => `<option value="${r}">`).join('')}</datalist>
+                    </div>
+
+                    <div>
+                        <label style="font-size:0.65rem; color:#123F2C; font-weight:800; text-transform:uppercase; display:block; margin-bottom:4px;">Nombre de la Labor</label>
+                        <input type="text" id="nl_labor" placeholder="Ej: DESECACIÓN PREVIA A COSECHA" style="text-transform:uppercase; width:100%; padding:8px 10px; border-radius:8px; border:1.5px solid #1E6B4C; font-size:0.85rem; font-weight:bold; box-sizing:border-box;">
+                    </div>
+                </div>
+
+                <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:8px; border-top:1px solid #E0DCD4; padding-top:12px;">
+                    <button type="button" id="btn-cancelar-nueva-labor" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:8px 16px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer;">VOLVER</button>
+                    <button type="button" id="btn-confirmar-nueva-labor" style="background:#1E6B4C; color:#FFFFFF; border:none; padding:8px 20px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer; box-shadow:0 4px 12px rgba(30,107,76,0.25);">
+                        REGISTRAR LABOR
+                    </button>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('nl_labor')?.focus();
+
+        document.getElementById('btn-cancelar-nueva-labor').onclick = () => {
+            container.innerHTML = contenidoPrevio;
+        };
+
+        document.getElementById('btn-confirmar-nueva-labor').onclick = async () => {
+            const rubro = document.getElementById('nl_rubro').value.trim().toUpperCase();
+            const labor = document.getElementById('nl_labor').value.trim().toUpperCase();
+
+            if (!rubro || !labor) {
+                alert("⚠️ Debe especificar tanto el rubro como el nombre de la labor.");
+                return;
+            }
+
+            try {
+                // Cálculo seguro Max(id_labor) + 1
+                const resMax = await ModuloOrdenes.m_ejecutarSqlLocal(`SELECT MAX(CAST(id_labor AS INTEGER)) as max_val FROM tipos_labores`);
+                const maxVal = (resMax.data && resMax.data[0] && resMax.data[0].max_val) ? Number(resMax.data[0].max_val) : 0;
+                const nuevoId = maxVal + 1;
+
+                // Inserción en la base SQLite local
+                const sqlInsert = `INSERT INTO tipos_labores (id_labor, rubro, labor, sincronizado) VALUES (?, ?, ?, 0)`;
+                await ModuloOrdenes.m_ejecutarSqlLocal(sqlInsert, [nuevoId, rubro, labor]);
+
+                // Actualizar memoria local en parámetros
+                ModuloOrdenes.parametros.labores.push({
+                    id_labor: nuevoId,
+                    rubro: rubro,
+                    labor: labor
+                });
+
+                // Restaurar formulario original
+                container.innerHTML = contenidoPrevio;
+
+                // Actualizar selector de Rubro si es nuevo
+                const selRubro = document.getElementById('rec_rubro');
+                if (selRubro) {
+                    if (![...selRubro.options].some(o => o.value === rubro)) {
+                        selRubro.add(new Option(rubro, rubro, true, true));
+                    } else {
+                        selRubro.value = rubro;
+                    }
+                }
+
+                // Filtrar las labores y dejar seleccionada la recién creada
+                ModuloOrdenes.m_filtrarLaboresPorRubro(rubro);
+                const selLabor = document.getElementById('rec_tipo_app');
+                if (selLabor) {
+                    selLabor.value = labor;
+                }
+
+            } catch (err) {
+                console.error("Error al registrar nueva labor:", err);
+                alert("Error al guardar labor en base local: " + err.message);
+            }
+        };
     },
 
     m_cambiarTabReceta: function(numTab) {

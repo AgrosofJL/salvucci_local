@@ -1,25 +1,28 @@
 ﻿/**
- * ModuloStockInsumos: Auditoría de Inventario Real-Time (LOCAL-FIRST SQLITE ENGINE)
- * AgroSoft J&L - "Apple Soft Studio" Edition / Tipografía Roboto
- * Paradigma: Local-First (Base SQLite Local -> Sincronizador Async)
- * Directivas: "No me quites nada" + Max(registro)+1 + Estado Activo + sincronizado = 0
+ * stock_insumos.js - Auditoría y Consolidación de Stock Físico
+ * Sistema: SALVUCCI / AgroSoft J&L
+ * Lógica: SUM(insumos_ingresos.total) - SUM(egresos_insumos.total_consumo WHERE estado = 'ACTIVO')
+ * Matching: TRIM(UPPER(insumos_ingresos.articulo)) === TRIM(UPPER(egresos_insumos.insumo))
  */
+
+// Helper universal de normalización de cadenas (elimina espacios múltiples y pasa a mayúsculas)
+const _normalizarTextoStock = (txt) => (txt || '').toString().replace(/\s+/g, ' ').trim().toUpperCase();
+
 const ModuloStockInsumos = {
     datosStock: [],        
-    datosOriginales: { ingresos: [], egresos: [] }, 
+    datosOriginales: { ingresos: [], egresos: [], insumosMaestros: [] }, 
     listaDepositos: [], 
     
     filtroDeposito: 'TODO',
     filtroTipo: 'TODO',
     textoBusqueda: '',
-    vistaActualTab: 'TODOS', // 'TODOS' | 'ALERTAS'
+    vistaActualTab: 'TODOS', // 'TODOS' | 'ALERTAS' | 'SIN_CATEGORIA'
     
     parametros: {
         cuadros: [],
         gastos: []
     },
 
-    // Helper IPC para ejecutar consultas SQL locales
     m_ejecutarSqlLocal: async function(sql, params = []) {
         if (window.apiLocal && window.apiLocal.query) {
             return await window.apiLocal.query({ sql, params });
@@ -50,6 +53,8 @@ const ModuloStockInsumos = {
     m_cerrarModal: function() {
         const modal = document.getElementById('modal-agrosoft');
         if (modal) modal.style.display = 'none';
+        const modalContent = document.querySelector('.modal-apple-content');
+        if (modalContent) modalContent.style.maxWidth = '780px';
     },
 
     m_notificarAlerta: function(mensaje, tipo = 'exito') {
@@ -79,15 +84,16 @@ const ModuloStockInsumos = {
     m_inicializar: async function() {
         const visor = document.getElementById('pantalla-dinamica');
         if (!visor) return;
-        visor.innerHTML = `<div class="loader-apple" style="font-family:'Roboto', sans-serif; text-align:center; padding:50px; color:#1E6B4C; font-weight:500; letter-spacing: 0.3px;">Calculando stock y existencias consolidadas desde SQLite local...</div>`;
+        visor.innerHTML = `<div class="loader-apple" style="font-family:'Roboto', sans-serif; text-align:center; padding:50px; color:#1E6B4C; font-weight:500; letter-spacing: 0.3px;">Consolidando entradas de ingresos y egresos de campo...</div>`;
 
         try {
-            const [resDep, resCuadros, resGastos, resIng, resEgr] = await Promise.all([
+            const [resDep, resCuadros, resGastos, resIng, resEgr, resIns] = await Promise.all([
                 this.m_ejecutarSqlLocal(`SELECT * FROM depositos ORDER BY deposito ASC`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM campos ORDER BY establecimiento ASC`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM tipos_gastos ORDER BY nombre_gasto ASC`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM insumos_ingresos`),
-                this.m_ejecutarSqlLocal(`SELECT * FROM egresos_insumos ORDER BY fecha DESC`)
+                this.m_ejecutarSqlLocal(`SELECT * FROM egresos_insumos ORDER BY fecha DESC`),
+                this.m_ejecutarSqlLocal(`SELECT reg_local, rubro, sub_rubro, articulo, descripcion, unidad_medida FROM insumos ORDER BY articulo ASC`)
             ]);
 
             this.listaDepositos = resDep.data || resDep || [];
@@ -96,6 +102,7 @@ const ModuloStockInsumos = {
             
             this.datosOriginales.ingresos = resIng.data || resIng || [];
             this.datosOriginales.egresos = resEgr.data || resEgr || [];
+            this.datosOriginales.insumosMaestros = resIns.data || resIns || [];
             
             this.filtroDeposito = 'TODO';
             this.filtroTipo = 'TODO';
@@ -105,54 +112,76 @@ const ModuloStockInsumos = {
             this.m_procesarStockGlobal();
             this.m_dibujarEstructura();
         } catch (err) {
-            console.error("❌ Error en Auditoría de Stock Local:", err);
-            visor.innerHTML = `<div style="color:#E0342A; padding:20px; font-family:'Roboto'; font-weight: 500;">Error local al procesar el stock desde base local: ${err.message}</div>`;
+            console.error("❌ Error en Inicialización de Stock:", err);
+            visor.innerHTML = `<div style="color:#E0342A; padding:20px; font-family:'Roboto'; font-weight: 500;">Error al procesar el stock local: ${err.message}</div>`;
         }
     },
 
     m_procesarStockGlobal: function() {
-        const consolidado = {};
+    const consolidado = {};
+    const mapaMaestro = new Map();
 
-        this.datosOriginales.ingresos.forEach(i => {
-            const artKey = (i.articulo || "SIN ARTICULO").trim().toUpperCase();
-            if (!consolidado[artKey]) {
-                consolidado[artKey] = { 
-                    articulo: i.articulo, 
-                    descripcion: (i.descripcion || "GENERAL").trim().toUpperCase(), 
-                    tipo_insumos: (i.tipo_insumo || "GENERAL").trim().toUpperCase(),
-                    entradas: 0, 
-                    salidas: 0, 
-                    unidad: i.unidad || 'u' 
-                };
-            }
-            consolidado[artKey].entradas += Number(i.total || i.cant) || 0;
-            if (i.descripcion && consolidado[artKey].descripcion === "GENERAL") {
-                consolidado[artKey].descripcion = i.descripcion.trim().toUpperCase();
-            }
-        });
+    // Mapeo del catálogo maestro para tomar Rubro y Sub-Rubro
+    (this.datosOriginales.insumosMaestros || []).forEach(m => {
+        const k = (m.articulo || '').trim().toUpperCase();
+        if (k) mapaMaestro.set(k, m);
+    });
 
-        this.datosOriginales.egresos.forEach(e => {
-            const artKey = (e.insumo || "SIN ARTICULO").trim().toUpperCase();
-            if (!consolidado[artKey]) {
-                consolidado[artKey] = { 
-                    articulo: e.insumo, 
-                    descripcion: (e.comentario || "GENERAL").trim().toUpperCase(), 
-                    tipo_insumos: (e.tipo_labor || "GENERAL").trim().toUpperCase(), 
-                    entradas: 0, 
-                    salidas: 0, 
-                    unidad: 'u' 
-                };
-            }
-            if ((e.estado || 'Activo').toUpperCase() === 'ACTIVO') {
-                consolidado[artKey].salidas += Number(e.total_consumo) || 0;
-            }
-        });
+    // 1. Entradas desde insumos_ingresos
+    (this.datosOriginales.ingresos || []).forEach(i => {
+        const artKey = (i.articulo || "SIN ARTICULO").trim().toUpperCase();
+        if (!consolidado[artKey]) {
+            const maestro = mapaMaestro.get(artKey);
+            consolidado[artKey] = { 
+                reg_local_maestro: maestro?.reg_local || null,
+                articulo: i.articulo, 
+                rubro: (maestro?.rubro || i.descripcion || "GENERAL").trim().toUpperCase(),
+                sub_rubro: (maestro?.sub_rubro || "").trim().toUpperCase(),
+                descripcion: (maestro?.descripcion || i.descripcion || "GENERAL").trim().toUpperCase(), 
+                tipo_insumos: (i.tipo_insumo || "GENERAL").trim().toUpperCase(),
+                entradas: 0, 
+                salidas: 0, 
+                unidad: maestro?.unidad_medida || i.unidad || 'LITROS' 
+            };
+        }
+        consolidado[artKey].entradas += Number(i.total) || 0;
+        if (i.descripcion && consolidado[artKey].descripcion === "GENERAL") {
+            consolidado[artKey].descripcion = i.descripcion.trim().toUpperCase();
+        }
+    });
 
-        this.datosStock = Object.values(consolidado).map(s => ({
+    // 2. Salidas directas desde egresos_insumos
+    (this.datosOriginales.egresos || []).forEach(e => {
+        const artKey = (e.insumo || "SIN ARTICULO").trim().toUpperCase();
+        if (!consolidado[artKey]) {
+            const maestro = mapaMaestro.get(artKey);
+            consolidado[artKey] = { 
+                reg_local_maestro: maestro?.reg_local || null,
+                articulo: e.insumo, 
+                rubro: (maestro?.rubro || "GENERAL").trim().toUpperCase(),
+                sub_rubro: (maestro?.sub_rubro || "").trim().toUpperCase(),
+                descripcion: (maestro?.descripcion || e.comentario || "GENERAL").trim().toUpperCase(), 
+                tipo_insumos: (e.tipo_labor || "GENERAL").trim().toUpperCase(), 
+                entradas: 0, 
+                salidas: 0, 
+                unidad: maestro?.unidad_medida || 'LITROS' 
+            };
+        }
+        // Suma directa de consumo sin trabas de condición
+        consolidado[artKey].salidas += Number(e.total_consumo) || 0;
+    });
+
+    // 3. Balance neto
+    this.datosStock = Object.values(consolidado).map(s => {
+        const sinRubro = !s.rubro || s.rubro === '0' || s.rubro === 'SIN ASIGNAR';
+        const sinSubRubro = !s.sub_rubro || s.sub_rubro === '0' || s.sub_rubro === 'SIN ASIGNAR';
+        return {
             ...s,
-            stock_actual: s.entradas - s.salidas
-        })).filter(x => x.entradas > 0 || x.salidas > 0).sort((a, b) => a.articulo.localeCompare(b.articulo));
-    },
+            stock_actual: s.entradas - s.salidas,
+            estaIncompleto: sinRubro && sinSubRubro
+        };
+    }).filter(x => x.entradas > 0 || x.salidas > 0).sort((a, b) => a.articulo.localeCompare(b.articulo));
+},
 
     m_cambiarTabVista: function(vista) {
         this.vistaActualTab = vista;
@@ -160,81 +189,106 @@ const ModuloStockInsumos = {
     },
 
     m_obtenerStockFiltrado: function() {
-        let datasetBase = [];
+    let datasetBase = [];
 
-        if (this.filtroDeposito === 'TODO') {
-            datasetBase = JSON.parse(JSON.stringify(this.datosStock));
-        } else {
-            const consolidadoPorDepo = {};
-            
-            this.datosOriginales.ingresos.filter(x => (x.campo_depo || '').trim().toUpperCase() === this.filtroDeposito.trim().toUpperCase()).forEach(i => {
-                const artKey = i.articulo.trim().toUpperCase();
+    if (this.filtroDeposito === 'TODO') {
+        datasetBase = JSON.parse(JSON.stringify(this.datosStock));
+    } else {
+        const consolidadoPorDepo = {};
+        const mapaMaestro = new Map();
+        const depoSel = this.filtroDeposito.trim().toUpperCase();
+
+        (this.datosOriginales.insumosMaestros || []).forEach(m => {
+            const k = (m.articulo || '').trim().toUpperCase();
+            if (k) mapaMaestro.set(k, m);
+        });
+        
+        // Entradas del depósito
+        (this.datosOriginales.ingresos || [])
+            .filter(x => (x.campo_depo || '').trim().toUpperCase() === depoSel)
+            .forEach(i => {
+                const artKey = (i.articulo || "SIN ARTICULO").trim().toUpperCase();
+                const maestro = mapaMaestro.get(artKey);
+
                 if (!consolidadoPorDepo[artKey]) {
                     consolidadoPorDepo[artKey] = { 
+                        reg_local_maestro: maestro?.reg_local || null,
                         articulo: i.articulo, 
-                        descripcion: (i.descripcion || "GENERAL").trim().toUpperCase(), 
-                        tipo_insumos: (i.tipo_insumo || "GENERAL").trim().toUpperCase(), 
+                        rubro: (maestro?.rubro || i.descripcion || "GENERAL").trim().toUpperCase(),
+                        sub_rubro: (maestro?.sub_rubro || "").trim().toUpperCase(),
+                        descripcion: (maestro?.descripcion || i.descripcion || "GENERAL").trim().toUpperCase(), 
                         entradas: 0, 
                         salidas: 0, 
-                        unidad: i.unidad || 'u' 
+                        unidad: maestro?.unidad_medida || i.unidad || 'LITROS' 
                     };
                 }
-                consolidadoPorDepo[artKey].entradas += Number(i.total || i.cant) || 0;
+                consolidadoPorDepo[artKey].entradas += Number(i.total) || 0;
             });
 
-            this.datosOriginales.egresos.filter(x => (x.deposito_origen || '').trim().toUpperCase() === this.filtroDeposito.trim().toUpperCase() && (x.estado || 'Activo').toUpperCase() === 'ACTIVO').forEach(e => {
-                const artKey = e.insumo.trim().toUpperCase();
+        // Consumos del depósito
+        (this.datosOriginales.egresos || [])
+            .filter(x => (x.deposito_origen || '').trim().toUpperCase() === depoSel)
+            .forEach(e => {
+                const artKey = (e.insumo || "SIN ARTICULO").trim().toUpperCase();
+                const maestro = mapaMaestro.get(artKey);
+
                 if (!consolidadoPorDepo[artKey]) {
                     consolidadoPorDepo[artKey] = { 
+                        reg_local_maestro: maestro?.reg_local || null,
                         articulo: e.insumo, 
-                        descripcion: (e.comentario || "GENERAL").trim().toUpperCase(), 
-                        tipo_insumos: (e.tipo_labor || "GENERAL").trim().toUpperCase(), 
+                        rubro: (maestro?.rubro || "GENERAL").trim().toUpperCase(),
+                        sub_rubro: (maestro?.sub_rubro || "").trim().toUpperCase(),
+                        descripcion: (maestro?.descripcion || e.comentario || "GENERAL").trim().toUpperCase(), 
                         entradas: 0, 
                         salidas: 0, 
-                        unidad: 'u' 
+                        unidad: maestro?.unidad_medida || 'LITROS' 
                     };
                 }
                 consolidadoPorDepo[artKey].salidas += Number(e.total_consumo) || 0;
             });
 
-            datasetBase = Object.values(consolidadoPorDepo).map(s => ({
+        datasetBase = Object.values(consolidadoPorDepo)
+            .filter(x => x.entradas > 0 || x.salidas > 0)
+            .map(s => ({
                 ...s,
-                stock_actual: s.entradas - s.salidas
-            })).filter(x => x.entradas > 0 || x.salidas > 0);
-        }
+                stock_actual: s.entradas - s.salidas,
+                estaIncompleto: !s.rubro || s.rubro === 'SIN ASIGNAR'
+            }));
+    }
 
-        if (this.filtroTipo !== 'TODO') {
-            datasetBase = datasetBase.filter(s => s.tipo_insumos === this.filtroTipo.toUpperCase() || s.descripcion === this.filtroTipo.toUpperCase());
-        }
+    if (this.filtroTipo !== 'TODO') {
+        datasetBase = datasetBase.filter(s => s.rubro === this.filtroTipo.toUpperCase() || s.sub_rubro === this.filtroTipo.toUpperCase());
+    }
 
-        if (this.textoBusqueda) {
-            const v = this.textoBusqueda.toLowerCase();
-            datasetBase = datasetBase.filter(s => 
-                s.articulo.toLowerCase().includes(v) || 
-                s.descripcion.toLowerCase().includes(v) ||
-                s.tipo_insumos.toLowerCase().includes(v)
-            );
-        }
+    if (this.textoBusqueda) {
+        const v = this.textoBusqueda.toLowerCase();
+        datasetBase = datasetBase.filter(s => 
+            s.articulo.toLowerCase().includes(v) || 
+            s.rubro.toLowerCase().includes(v) ||
+            s.sub_rubro.toLowerCase().includes(v) ||
+            s.descripcion.toLowerCase().includes(v)
+        );
+    }
 
-        if (this.vistaActualTab === 'ALERTAS') {
-            datasetBase = datasetBase.filter(x => x.stock_actual <= 0);
-        }
+    if (this.vistaActualTab === 'ALERTAS') {
+        datasetBase = datasetBase.filter(x => x.stock_actual <= 0);
+    } else if (this.vistaActualTab === 'SIN_CATEGORIA') {
+        datasetBase = datasetBase.filter(x => x.estaIncompleto);
+    }
 
-        return datasetBase;
-    },
+    return datasetBase;
+},
 
     m_dibujarEstructura: function() {
         const visor = document.getElementById('pantalla-dinamica');
         if (!visor) return;
 
         const datos = this.m_obtenerStockFiltrado();
-        const totalItems = this.datosStock.length;
         const totalAlertas = this.datosStock.filter(x => x.stock_actual <= 0).length;
-        const volumenEntradas = this.datosStock.reduce((acc, c) => acc + c.entradas, 0);
-        const volumenExistente = this.datosStock.reduce((acc, c) => acc + Math.max(0, c.stock_actual), 0);
+        const totalIncompletos = this.datosStock.filter(x => x.estaIncompleto).length;
 
-        const tiposInsumosUnicos = [...new Set(this.datosStock.map(s => s.tipo_insumos || s.descripcion).filter(Boolean))].sort();
-        const depositosDisponibles = [...new Set(this.datosOriginales.ingresos.map(i => (i.campo_depo || '').trim().toUpperCase()).filter(Boolean))].sort();
+        const rubrosUnicos = [...new Set(this.datosStock.map(s => s.rubro).filter(r => r && r !== '0' && r !== 'SIN ASIGNAR'))].sort();
+        const depositosDisponibles = [...new Set(this.datosOriginales.ingresos.map(i => _normalizarTextoStock(i.campo_depo)).filter(Boolean))].sort();
 
         visor.innerHTML = `
             <style>
@@ -273,47 +327,16 @@ const ModuloStockInsumos = {
                     background: rgba(224, 52, 42, 0.12); color: #E0342A; padding: 2px 7px;
                     border-radius: 12px; font-size: 0.68rem; font-weight: 800;
                 }
-
-                /* GRID Y TARJETAS KPI */
-                .grid-kpi-stock {
-                    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px;
+                .badge-tab-warn {
+                    background: rgba(224, 134, 0, 0.12); color: #E08600; padding: 2px 7px;
+                    border-radius: 12px; font-size: 0.68rem; font-weight: 800;
                 }
-                @media (max-width: 1100px) { .grid-kpi-stock { grid-template-columns: repeat(2, 1fr); } }
-                @media (max-width: 600px) { .grid-kpi-stock { grid-template-columns: 1fr; } }
-
-                .kpi-card-stk {
-                    background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 12px; padding: 12px 14px;
-                    display: flex; flex-direction: column; justify-content: space-between; gap: 4px;
-                    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03); transition: transform 0.15s ease, box-shadow 0.15s ease;
-                }
-                .kpi-card-stk:hover { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(0, 0, 0, 0.06); }
-                .kpi-header-row { display: flex; justify-content: space-between; align-items: center; }
-                .kpi-card-stk .kpi-label { font-size: 0.62rem; color: #6B6255; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
-                
-                .kpi-icon-pill {
-                    width: 26px; height: 26px; border-radius: 8px; display: flex;
-                    align-items: center; justify-content: center; flex-shrink: 0;
-                }
-                .kpi-card-stk .kpi-value {
-                    font-size: 1.25rem; font-weight: 800; color: #1D1D1F; margin: 0; line-height: 1.15; letter-spacing: -0.3px;
-                }
-                .kpi-subtext { font-size: 0.68rem; color: #8E8E93; font-weight: 500; margin-top: 2px; display: block; }
-
-                .kpi-card-stk.accent-neutral { border-left: 4px solid #4B4F56; }
-                .kpi-card-stk.accent-neutral .kpi-icon-pill { background: #F0F2F5; color: #4B4F56; }
-                .kpi-card-stk.accent-green { border-left: 4px solid #1E6B4C; }
-                .kpi-card-stk.accent-green .kpi-icon-pill { background: rgba(30, 107, 76, 0.1); color: #1E6B4C; }
-                .kpi-card-stk.accent-orange { border-left: 4px solid #E08600; }
-                .kpi-card-stk.accent-orange .kpi-icon-pill { background: rgba(224, 134, 0, 0.1); color: #E08600; }
-                .kpi-card-stk.accent-red { border-left: 4px solid #E0342A; }
-                .kpi-card-stk.accent-red .kpi-icon-pill { background: rgba(224, 52, 42, 0.1); color: #E0342A; }
 
                 .panel-box-plant {
                     background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 14px; padding: 14px;
                     display: flex; flex-direction: column; gap: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.04);
                 }
 
-                /* CABECERAS FIJAS (STICKY HEADERS) */
                 .wrapper-tabla-scroll-sticky {
                     max-height: calc(100vh - 275px);
                     overflow-y: auto;
@@ -343,13 +366,13 @@ const ModuloStockInsumos = {
             </style>
 
             <div class="stock-ins-layout animated fadeIn">
-                ${ComponentesUI.botonVolverHTML('INSUMOS')}
+                ${typeof ComponentesUI !== 'undefined' && ComponentesUI.botonVolverHTML ? ComponentesUI.botonVolverHTML('INSUMOS') : ''}
 
                 <!-- HEADER SUPERIOR -->
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; margin-bottom:10px; flex-wrap:wrap; gap:10px;">
                     <div>
                         <h2 style="margin:0; font-weight: 800; font-size: 1.3rem; letter-spacing: -0.5px; color:#123F2C;">Auditoría de Stock de Insumos</h2>
-                        <p style="margin:2px 0 0 0; font-size:0.75rem; color:#6B6255;">Balances de existencia en tiempo real e inventario físico por galpón (Base Local)</p>
+                        <p style="margin:2px 0 0 0; font-size:0.75rem; color:#6B6255;">Entradas de remito menos consumos directos de labores y órdenes (Base Local)</p>
                     </div>
 
                     <div style="display:flex; gap:8px; align-items:center;">
@@ -369,75 +392,25 @@ const ModuloStockInsumos = {
                 <div class="tabs-header-archivero-main">
                     <div class="tab-main-archivero ${this.vistaActualTab === 'TODOS' ? 'active' : ''}" onclick="ModuloStockInsumos.m_cambiarTabVista('TODOS')">
                         <i data-lucide="boxes" style="width:14px; height:14px;"></i>
-                        <span>TODO EL STOCK DISPONIBLE</span>
+                        <span>TODO EL STOCK ACTIVO</span>
                         <span class="badge-tab-main">${this.datosStock.length} Artículos</span>
                     </div>
                     <div class="tab-main-archivero ${this.vistaActualTab === 'ALERTAS' ? 'active' : ''}" onclick="ModuloStockInsumos.m_cambiarTabVista('ALERTAS')">
                         <i data-lucide="alert-triangle" style="width:14px; height:14px; color:#E0342A;"></i>
-                        <span>ALERTAS / QUIEBRES DE STOCK</span>
+                        <span>QUIEBRES DE STOCK</span>
                         <span class="badge-tab-alert">${totalAlertas} Críticos</span>
                     </div>
-                </div>
-
-                <!-- KPIS PRINCIPALES -->
-                <div class="grid-kpi-stock">
-                    <div class="card-kpi-stk accent-neutral">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">VARIEDAD DE ARTÍCULOS</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="boxes" style="width:14px; height:14px;"></i>
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value">${totalItems} <small>Insumos</small></h3>
-                            <span class="kpi-subtext">Catálogo activo en depósitos</span>
-                        </div>
-                    </div>
-
-                    <div class="card-kpi-stk accent-green">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">EXISTENCIA NETA TOTAL</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="package-check" style="width:14px; height:14px;"></i>
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value" style="color:#1E6B4C;">${volumenExistente.toLocaleString('es-AR')} <small>Uds</small></h3>
-                            <span class="kpi-subtext">Unidades listas para despacho</span>
-                        </div>
-                    </div>
-
-                    <div class="card-kpi-stk accent-orange">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">VOLUMEN HISTÓRICO INGRESADO</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="trending-up" style="width:14px; height:14px;"></i>
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value" style="color:#E08600;">${volumenEntradas.toLocaleString('es-AR')} <small>Uds</small></h3>
-                            <span class="kpi-subtext">Cargas acumuladas en galpones</span>
-                        </div>
-                    </div>
-
-                    <div class="card-kpi-stk accent-red">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">LÍNEAS SIN STOCK</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="alert-octagon" style="width:14px; height:14px;"></i>
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value" style="color:#E0342A;">${totalAlertas} <small>Líneas</small></h3>
-                            <span class="kpi-subtext">Requieren reposición</span>
-                        </div>
+                    <div class="tab-main-archivero ${this.vistaActualTab === 'SIN_CATEGORIA' ? 'active' : ''}" onclick="ModuloStockInsumos.m_cambiarTabVista('SIN_CATEGORIA')">
+                        <i data-lucide="help-circle" style="width:14px; height:14px; color:#E08600;"></i>
+                        <span>SIN RUBRO / SUB-RUBRO</span>
+                        <span class="badge-tab-warn">${totalIncompletos} Pendientes</span>
                     </div>
                 </div>
 
                 <!-- BARRA DE BÚSQUEDA Y FILTROS -->
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
                     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                        <input type="text" id="buscador-stock" placeholder="🔍 Buscar insumo o descripción técnica..." value="${this.textoBusqueda}" oninput="ModuloStockInsumos.m_onBusquedaInput(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; min-width:240px;">
+                        <input type="text" id="buscador-stock" placeholder="🔍 Buscar insumo, rubro, sub-rubro..." value="${this.textoBusqueda}" oninput="ModuloStockInsumos.m_onBusquedaInput(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; min-width:280px;">
                         
                         <select onchange="ModuloStockInsumos.m_onDepositoChange(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; font-weight:600; cursor:pointer;">
                             <option value="TODO">🏢 Todos los Depósitos</option>
@@ -445,8 +418,8 @@ const ModuloStockInsumos = {
                         </select>
 
                         <select id="filtro-tipo-insumo" onchange="ModuloStockInsumos.m_onTipoChange(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; font-weight:600; cursor:pointer;">
-                            <option value="TODO">🏷️ Todas las Familias / Grupos</option>
-                            ${tiposInsumosUnicos.map(t => `<option value="${t}" ${this.filtroTipo === t ? 'selected' : ''}>${t}</option>`).join('')}
+                            <option value="TODO">🏷️ Todos los Rubros</option>
+                            ${rubrosUnicos.map(t => `<option value="${t}" ${this.filtroTipo === t ? 'selected' : ''}>${t}</option>`).join('')}
                         </select>
                     </div>
 
@@ -457,11 +430,11 @@ const ModuloStockInsumos = {
                     ` : ''}
                 </div>
 
-                <!-- TABLA EJECUTIVA CON CABECERAS FIJAS -->
+                <!-- TABLA EJECUTIVA -->
                 <div class="panel-box-plant">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <span style="font-size:0.75rem; font-weight:800; color:#123F2C; text-transform:uppercase; letter-spacing:0.4px;">
-                            📋 Inventario Físico de Insumos (${datos.length})
+                            📋 Balance de Stock Físico (${datos.length})
                         </span>
                         <span style="font-size:0.72rem; color:#6B6255; font-weight:600;">Cabeceras fijas siempre visibles</span>
                     </div>
@@ -472,7 +445,7 @@ const ModuloStockInsumos = {
                                 <tr>
                                     <th>Artículo / Insumo Maestro</th>
                                     <th>Ubicación por Almacén / Galpón</th>
-                                    <th>Familia / Grupo</th>
+                                    <th>Familia / Grupo (Rubro · Sub-Rubro)</th>
                                     <th style="text-align:right;">Total Entradas</th>
                                     <th style="text-align:right;">Total Consumos</th>
                                     <th style="text-align:right;">Stock Neto</th>
@@ -503,10 +476,19 @@ const ModuloStockInsumos = {
 
             const unicosDepositosConStock = [];
             const historialDepositos = [...new Set(this.datosOriginales.ingresos.map(x => x.campo_depo).filter(Boolean))];
+            const artKeyTarget = _normalizarTextoStock(s.articulo);
             
             historialDepositos.forEach(depoName => {
-                const ent = this.datosOriginales.ingresos.filter(x => (x.articulo || '').trim().toUpperCase() === s.articulo.trim().toUpperCase() && (x.campo_depo || '').trim().toUpperCase() === depoName.trim().toUpperCase()).reduce((a,c) => a + (Number(c.total || c.cant) || 0), 0);
-                const sal = this.datosOriginales.egresos.filter(x => (x.insumo || '').trim().toUpperCase() === s.articulo.trim().toUpperCase() && (x.deposito_origen || '').trim().toUpperCase() === depoName.trim().toUpperCase() && (x.estado || 'Activo').toUpperCase() === 'ACTIVO').reduce((a,c) => a + (Number(c.total_consumo) || 0), 0);
+                const depoNorm = _normalizarTextoStock(depoName);
+
+                const ent = this.datosOriginales.ingresos
+                    .filter(x => _normalizarTextoStock(x.articulo) === artKeyTarget && _normalizarTextoStock(x.campo_depo) === depoNorm)
+                    .reduce((a, c) => a + (parseFloat(c.total) || parseFloat(c.cant) || parseFloat(c.cantidad) || 0), 0);
+
+                const sal = this.datosOriginales.egresos
+                    .filter(x => _normalizarTextoStock(x.insumo || x.articulo) === artKeyTarget && _normalizarTextoStock(x.deposito_origen) === depoNorm && (!_normalizarTextoStock(x.estado) || _normalizarTextoStock(x.estado) === 'ACTIVO'))
+                    .reduce((a, c) => a + (parseFloat(c.total_consumo) || parseFloat(c.cantidad) || parseFloat(c.cant) || parseFloat(c.dosis_ha) || 0), 0);
+
                 const netoDepo = ent - sal;
                 if (netoDepo > 0) {
                     unicosDepositosConStock.push({ name: depoName, stk: netoDepo });
@@ -519,10 +501,32 @@ const ModuloStockInsumos = {
                 </span>
             `).join(' ') || `<span style="font-size:0.68rem; color:#E0342A; font-weight:600;">⚠️ Sin existencias físicas</span>`;
 
+            let celdaFamiliaHTML = '';
+            if (s.estaIncompleto) {
+                celdaFamiliaHTML = `
+                    <div onclick="ModuloStockInsumos.m_abrirModalEdicionArticulo('${s.articulo.replace(/'/g, "\\'")}')" style="cursor:pointer; display:inline-flex; flex-direction:column; gap:2px;" title="Clic para asignar Rubro y Sub-Rubro">
+                        <span style="background:rgba(224,134,0,0.12); color:#E08600; border:1px dashed #E08600; padding:3px 8px; border-radius:6px; font-weight:800; font-size:0.7rem;">
+                            ⚠️ ${!s.rubro ? 'SIN RUBRO' : s.rubro} · ${!s.sub_rubro ? 'SIN SUB-RUBRO' : s.sub_rubro}
+                        </span>
+                        <small style="color:#0071E3; font-weight:700; font-size:0.65rem;">+ Completar Clasificación</small>
+                    </div>
+                `;
+            } else {
+                celdaFamiliaHTML = `
+                    <div style="display:inline-flex; flex-direction:column;">
+                        <span style="background:#F0F2F5; color:#123F2C; padding:2px 7px; border-radius:4px; font-weight:800; font-size:0.72rem;">
+                            🏷️ ${s.rubro}
+                        </span>
+                        ${s.sub_rubro ? `<span style="font-size:0.68rem; color:#6B6255; margin-left:4px; margin-top:2px;">${s.sub_rubro}</span>` : ''}
+                    </div>
+                `;
+            }
+
             return `
                 <tr>
                     <td>
                         <strong style="color:#1D1D1F; font-size:0.86rem;">${s.articulo}</strong>
+                        ${s.descripcion ? `<div style="font-size:0.7rem; color:#6B6255;">${s.descripcion}</div>` : ''}
                     </td>
                     <td>
                         <div style="display:flex; flex-wrap:wrap; gap:4px; align-items:center;">
@@ -530,12 +534,10 @@ const ModuloStockInsumos = {
                         </div>
                     </td>
                     <td>
-                        <span style="background:#F0F2F5; color:#1D1D1F; padding:2px 7px; border-radius:4px; font-weight:600; font-size:0.72rem;">
-                            ${s.tipo_insumos || s.descripcion || 'GENERAL'}
-                        </span>
+                        ${celdaFamiliaHTML}
                     </td>
                     <td style="text-align:right; font-family:monospace; color:#6B6255;">${s.entradas.toLocaleString('es-AR')} ${s.unidad}</td>
-                    <td style="text-align:right; font-family:monospace; color:#E0342A;">-${s.salidas.toLocaleString('es-AR')} ${s.unidad}</td>
+                    <td style="text-align:right; font-family:monospace; color:#E0342A; font-weight:700;">-${s.salidas.toLocaleString('es-AR')} ${s.unidad}</td>
                     <td style="text-align:right; font-weight:800; font-size:0.95rem; color:${esCritico ? '#E0342A' : '#1FA958'}; font-family:monospace;">
                         ${s.stock_actual.toLocaleString('es-AR')} ${s.unidad}
                     </td>
@@ -544,14 +546,220 @@ const ModuloStockInsumos = {
                             ${labelCondicion}
                         </span>
                     </td>
-                    <td style="text-align:center;">
-                        <button class="btn-accion-plant" onclick="ModuloStockInsumos.m_abrirAccionesInsumo('${s.articulo.replace(/'/g, "\\'")}', ${s.stock_actual}, '${s.unidad}')" title="Desglose y movimientos de stock">
-                            📦 Gestionar
-                        </button>
+                    <td style="text-align:center; white-space:nowrap;">
+                        <div style="display:inline-flex; gap:4px; align-items:center;">
+                            <button class="btn-accion-plant" onclick="ModuloStockInsumos.m_abrirModalEdicionArticulo('${s.articulo.replace(/'/g, "\\'")}')" title="Modificar ficha técnica y categorías">
+                                ✏️
+                            </button>
+                            <button class="btn-accion-plant" onclick="ModuloStockInsumos.m_abrirAccionesInsumo('${s.articulo.replace(/'/g, "\\'")}', ${s.stock_actual}, '${s.unidad}')" title="Desglose y movimientos de stock">
+                                📦
+                            </button>
+                        </div>
                     </td>
                 </tr>
             `;
         }).join('');
+    },
+
+    m_abrirModalEdicionArticulo: function(codigoArticulo) {
+        this.m_asegurarModalBase();
+        const modal = document.getElementById('modal-agrosoft');
+        const container = document.getElementById('modal-formulario');
+        if (!container) return;
+
+        const modalContent = document.querySelector('.modal-apple-content');
+        if (modalContent) modalContent.style.maxWidth = '680px';
+
+        const codigoNorm = _normalizarTextoStock(codigoArticulo);
+        let art = this.datosOriginales.insumosMaestros.find(i => _normalizarTextoStock(i.articulo) === codigoNorm);
+        if (!art) {
+            const st = this.datosStock.find(x => _normalizarTextoStock(x.articulo) === codigoNorm);
+            art = {
+                reg_local: null,
+                articulo: codigoArticulo,
+                rubro: st?.rubro || '',
+                sub_rubro: st?.sub_rubro || '',
+                descripcion: st?.descripcion || '',
+                unidad_medida: st?.unidad || 'LTS'
+            };
+        }
+
+        document.getElementById('modal-titulo').innerText = "CLASIFICACIÓN Y FICHA TÉCNICA";
+
+        const rubrosUnicos = [...new Set(this.datosOriginales.insumosMaestros.map(i => (i.rubro || '').trim().toUpperCase()).filter(r => r && r !== '0' && r !== 'SIN ASIGNAR'))].sort();
+
+        container.innerHTML = `
+            <div style="display:flex; flex-direction:column; gap:12px; font-family:'Roboto', sans-serif;">
+                <div style="background:rgba(30,107,76,0.08); border-left:4px solid #1E6B4C; padding:10px 14px; border-radius:8px;">
+                    <strong style="color:#123F2C; font-size:0.85rem;">ASIGNACIÓN DE RUBRO Y SUB-RUBRO</strong>
+                    <p style="font-size:0.72rem; margin:2px 0 0 0; color:#6B6255;">Seleccione o cree nuevos rubros y sub-rubros para clasificar el insumo.</p>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div>
+                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Rubro Principal</label>
+                        <div style="display:flex; gap:6px;">
+                            <select id="sel_rubro_modal" onchange="ModuloStockInsumos.m_onRubroModalChange(this.value)" style="flex:1; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; background:#FFFFFF; font-weight:600; cursor:pointer;">
+                                <option value="">Seleccione Rubro...</option>
+                                ${rubrosUnicos.map(r => `<option value="${r}" ${art.rubro === r ? 'selected' : ''}>🏷️ ${r}</option>`).join('')}
+                            </select>
+                            <button type="button" onclick="ModuloStockInsumos.m_promptNuevoRubro()" title="Agregar nuevo Rubro" style="background:#1E6B4C; color:white; border:none; width:34px; height:34px; border-radius:8px; font-weight:900; font-size:1.1rem; cursor:pointer; flex-shrink:0;">+</button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Sub-Rubro</label>
+                        <div style="display:flex; gap:6px;">
+                            <select id="sel_subrubro_modal" style="flex:1; padding:8px 10px; border-radius:8px; border:1.5px solid #1E6B4C; font-size:0.85rem; background:#FFFFFF; font-weight:600; cursor:pointer;">
+                                <option value="">Esperando selección de rubro...</option>
+                            </select>
+                            <button type="button" onclick="ModuloStockInsumos.m_promptNuevoSubRubro()" title="Agregar nuevo Sub-Rubro" style="background:#1E6B4C; color:white; border:none; width:34px; height:34px; border-radius:8px; font-weight:900; font-size:1.1rem; cursor:pointer; flex-shrink:0;">+</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div>
+                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Código / Nombre Artículo</label>
+                        <input type="text" id="edit_articulo" value="${art.articulo}" style="text-transform:uppercase; width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; font-weight:bold; box-sizing:border-box;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Unidad de Medida</label>
+                        <input type="text" id="edit_unidad" value="${art.unidad_medida || 'LTS'}" placeholder="LTS, KG, U" style="text-transform:uppercase; width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
+                    </div>
+                </div>
+
+                <div>
+                    <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Descripción Técnica</label>
+                    <input type="text" id="edit_descripcion" value="${art.descripcion || ''}" placeholder="Especificación técnica o formulación" style="text-transform:uppercase; width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
+                </div>
+
+                <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:8px; border-top:1px solid #E0DCD4; padding-top:12px;">
+                    <button type="button" onclick="ModuloStockInsumos.m_cerrarModal()" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:8px 16px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer;">CANCELAR</button>
+                    <button type="button" id="btn_guardar_maestro_stk" style="background:#1E6B4C; color:#FFFFFF; border:none; padding:8px 20px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer; box-shadow:0 4px 12px rgba(30,107,76,0.25);">
+                        GUARDAR CAMBIOS MAESTROS
+                    </button>
+                </div>
+            </div>
+        `;
+
+        if (art.rubro) {
+            this.m_onRubroModalChange(art.rubro, art.sub_rubro);
+        } else {
+            this.m_onRubroModalChange('', '');
+        }
+
+        if (modal) modal.style.display = 'flex';
+
+        document.getElementById('btn_guardar_maestro_stk').onclick = async () => {
+            const rubro = document.getElementById('sel_rubro_modal').value.trim().toUpperCase();
+            const subRubro = document.getElementById('sel_subrubro_modal').value.trim().toUpperCase();
+            const nuevoCodigo = document.getElementById('edit_articulo').value.trim().toUpperCase();
+            const unidad = document.getElementById('edit_unidad').value.trim().toUpperCase() || 'U';
+            const descripcion = document.getElementById('edit_descripcion').value.trim().toUpperCase();
+
+            if (!nuevoCodigo) {
+                this.m_notificarAlerta("El código o nombre del artículo no puede estar vacío.", 'error');
+                return;
+            }
+
+            try {
+                if (art.reg_local) {
+                    const sqlUpdate = `
+                        UPDATE insumos 
+                        SET rubro = ?, sub_rubro = ?, articulo = ?, descripcion = ?, unidad_medida = ?, sincronizado = 0 
+                        WHERE reg_local = ?
+                    `;
+                    await this.m_ejecutarSqlLocal(sqlUpdate, [rubro, subRubro, nuevoCodigo, descripcion, unidad, String(art.reg_local)]);
+                } else {
+                    const resMax = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(reg_local AS INTEGER)) as max_reg FROM insumos`);
+                    const maxVal = (resMax.data && resMax.data[0] && resMax.data[0].max_reg) ? Number(resMax.data[0].max_reg) : 0;
+                    const nuevoRegLocal = String(maxVal + 1);
+
+                    const sqlInsert = `
+                        INSERT INTO insumos (reg_local, rubro, sub_rubro, articulo, descripcion, unidad_medida, text_labor, sincronizado) 
+                        VALUES (?, ?, ?, ?, ?, ?, 'SIN USO', 0)
+                    `;
+                    await this.m_ejecutarSqlLocal(sqlInsert, [nuevoRegLocal, rubro, subRubro, nuevoCodigo, descripcion, unidad]);
+                }
+
+                // Propagación si cambió el nombre del insumo
+                if (_normalizarTextoStock(codigoArticulo) !== _normalizarTextoStock(nuevoCodigo)) {
+                    await this.m_ejecutarSqlLocal(`UPDATE insumos_ingresos SET articulo = ?, sincronizado = 0 WHERE UPPER(TRIM(articulo)) = ?`, [nuevoCodigo, codigoArticulo]);
+                    await this.m_ejecutarSqlLocal(`UPDATE egresos_insumos SET insumo = ?, sincronizado = 0 WHERE UPPER(TRIM(insumo)) = ?`, [nuevoCodigo, codigoArticulo]);
+                }
+
+                this.m_cerrarModal();
+                this.m_notificarAlerta("Clasificación guardada con éxito.", 'exito');
+                await this.m_inicializar();
+
+            } catch (err) {
+                console.error("Error al actualizar maestro:", err);
+                this.m_notificarAlerta("Error al actualizar artículo: " + err.message, 'error');
+            }
+        };
+    },
+
+    m_onRubroModalChange: function(rubroVal, subRubroSeleccionado = '') {
+        const selectSub = document.getElementById('sel_subrubro_modal');
+        if (!selectSub) return;
+
+        const rubroNorm = _normalizarTextoStock(rubroVal);
+
+        if (!rubroNorm) {
+            selectSub.innerHTML = '<option value="">Seleccione un Rubro primero...</option>';
+            return;
+        }
+
+        const subRubrosDelRubro = [...new Set(
+            this.datosOriginales.insumosMaestros
+                .filter(i => _normalizarTextoStock(i.rubro) === rubroNorm)
+                .map(i => _normalizarTextoStock(i.sub_rubro))
+                .filter(sr => sr && sr !== '0' && sr !== 'SIN ASIGNAR')
+        )].sort();
+
+        let optionsHTML = '<option value="">Seleccione Sub-Rubro...</option>';
+        subRubrosDelRubro.forEach(sr => {
+            const isSel = (_normalizarTextoStock(subRubroSeleccionado) === sr) ? 'selected' : '';
+            optionsHTML += `<option value="${sr}" ${isSel}>📦 ${sr}</option>`;
+        });
+
+        if (subRubroSeleccionado && !subRubrosDelRubro.includes(_normalizarTextoStock(subRubroSeleccionado))) {
+            optionsHTML += `<option value="${_normalizarTextoStock(subRubroSeleccionado)}" selected>📦 ${_normalizarTextoStock(subRubroSeleccionado)}</option>`;
+        }
+
+        selectSub.innerHTML = optionsHTML;
+    },
+
+    m_promptNuevoRubro: function() {
+        const nuevo = prompt("Ingrese el nombre del nuevo RUBRO maestro:");
+        if (!nuevo || !nuevo.trim()) return;
+        const nombreRubro = nuevo.trim().toUpperCase();
+
+        const selectRubro = document.getElementById('sel_rubro_modal');
+        if (selectRubro) {
+            const opt = new Option(`🏷️ ${nombreRubro}`, nombreRubro, true, true);
+            selectRubro.add(opt);
+            this.m_onRubroModalChange(nombreRubro, '');
+        }
+    },
+
+    m_promptNuevoSubRubro: function() {
+        const rubroActual = document.getElementById('sel_rubro_modal')?.value;
+        if (!rubroActual) {
+            alert("Primero seleccione o cree un Rubro.");
+            return;
+        }
+
+        const nuevo = prompt(`Ingrese el nuevo SUB-RUBRO para [${rubroActual}]:`);
+        if (!nuevo || !nuevo.trim()) return;
+        const nombreSub = nuevo.trim().toUpperCase();
+
+        const selectSub = document.getElementById('sel_subrubro_modal');
+        if (selectSub) {
+            const opt = new Option(`📦 ${nombreSub}`, nombreSub, true, true);
+            selectSub.add(opt);
+        }
     },
 
     m_onDepositoChange: function(depo) {
@@ -587,10 +795,19 @@ const ModuloStockInsumos = {
         document.getElementById('modal-titulo').innerText = `DESGLOSE DE UBICACIÓN LOGÍSTICA`;
         
         const historialDepositosUnicos = [...new Set(this.datosOriginales.ingresos.map(x => x.campo_depo).filter(Boolean))];
+        const artKeyTarget = _normalizarTextoStock(articulo);
 
         const desgloseFisico = historialDepositosUnicos.map(depoName => {
-            const ent = this.datosOriginales.ingresos.filter(x => (x.articulo || '').trim().toUpperCase() === articulo.trim().toUpperCase() && (x.campo_depo || '').trim().toUpperCase() === depoName.trim().toUpperCase()).reduce((a,c) => a + (Number(c.total || c.cant) || 0), 0);
-            const sal = this.datosOriginales.egresos.filter(x => (x.insumo || '').trim().toUpperCase() === articulo.trim().toUpperCase() && (x.deposito_origen || '').trim().toUpperCase() === depoName.trim().toUpperCase() && (x.estado || 'Activo').toUpperCase() === 'ACTIVO').reduce((a,c) => a + (Number(c.total_consumo) || 0), 0);
+            const depoNorm = _normalizarTextoStock(depoName);
+
+            const ent = this.datosOriginales.ingresos
+                .filter(x => _normalizarTextoStock(x.articulo) === artKeyTarget && _normalizarTextoStock(x.campo_depo) === depoNorm)
+                .reduce((a,c) => a + (parseFloat(c.total) || parseFloat(c.cant) || parseFloat(c.cantidad) || 0), 0);
+
+            const sal = this.datosOriginales.egresos
+                .filter(x => _normalizarTextoStock(x.insumo || x.articulo) === artKeyTarget && _normalizarTextoStock(x.deposito_origen) === depoNorm && (!_normalizarTextoStock(x.estado) || _normalizarTextoStock(x.estado) === 'ACTIVO'))
+                .reduce((a,c) => a + (parseFloat(c.total_consumo) || parseFloat(c.cantidad) || parseFloat(c.cant) || 0), 0);
+
             return { deposito: depoName, subtotal: ent - sal };
         }).filter(f => f.subtotal > 0);
 
@@ -639,7 +856,7 @@ const ModuloStockInsumos = {
     },
 
     m_formTransferir: function(deposito, articulo, stockActual, unidad) {
-        const destinosDisponibles = [...new Set(this.datosOriginales.ingresos.map(x => x.campo_depo).filter(Boolean))].filter(d => d.trim().toUpperCase() !== deposito.trim().toUpperCase());
+        const destinosDisponibles = [...new Set(this.datosOriginales.ingresos.map(x => x.campo_depo).filter(Boolean))].filter(d => _normalizarTextoStock(d) !== _normalizarTextoStock(deposito));
         
         const container = document.getElementById('modal-formulario');
         document.getElementById('modal-titulo').innerText = "TRANSFERENCIA DE STOCK ENTRE GALPONES";
@@ -647,7 +864,7 @@ const ModuloStockInsumos = {
         const modalContent = document.querySelector('.modal-apple-content');
         if (modalContent) modalContent.style.maxWidth = '520px';
 
-        const matchStock = this.datosStock.find(x => x.articulo.trim().toUpperCase() === articulo.trim().toUpperCase());
+        const matchStock = this.datosStock.find(x => _normalizarTextoStock(x.articulo) === _normalizarTextoStock(articulo));
         const stockGlobalActual = matchStock ? matchStock.stock_actual : stockActual;
 
         container.innerHTML = `
@@ -661,7 +878,7 @@ const ModuloStockInsumos = {
                     <select id="trans_destino" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; background:#FFFFFF; outline:none;">
                         <option value="">Seleccione depósito destino...</option>
                         ${destinosDisponibles.map(d => `<option value="${d}">${d}</option>`).join('')}
-                        ${this.listaDepositos.filter(x => !destinosDisponibles.includes(x.deposito) && x.deposito !== deposito).map(cat => `<option value="${cat.deposito}">${cat.deposito} (Nuevo Destino)</option>`).join('')}
+                        ${this.listaDepositos.filter(x => !destinosDisponibles.includes(x.deposito) && _normalizarTextoStock(x.deposito) !== _normalizarTextoStock(deposito)).map(cat => `<option value="${cat.deposito}">${cat.deposito} (Nuevo Destino)</option>`).join('')}
                     </select>
                 </div>
 
@@ -682,26 +899,23 @@ const ModuloStockInsumos = {
         const destino = document.getElementById('trans_destino').value;
         const cantidad = parseFloat(document.getElementById('trans_cantidad').value) || 0;
 
-        if (!destino) return window.ComponentesUI ? window.ComponentesUI.notifica("⚠️ Seleccione un depósito de destino.") : alert("⚠️ Seleccione destino.");
-        if (cantidad <= 0 || cantidad > stockActual) return window.ComponentesUI ? window.ComponentesUI.notifica("⚠️ Cantidad no válida.") : alert("⚠️ Cantidad no válida.");
+        if (!destino) return alert("⚠️ Seleccione destino.");
+        if (cantidad <= 0 || cantidad > stockActual) return alert("⚠️ Cantidad no válida.");
 
         const btnSubmit = document.getElementById('btn_submit_operacion');
         if (btnSubmit) { btnSubmit.disabled = true; btnSubmit.innerText = "TRASLADANDO..."; }
 
         try {
-            // Regla Max(reg_local)+1 para egresos_insumos
             const resMaxEgr = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(reg_local AS INTEGER)) as max_reg FROM egresos_insumos`);
             const maxValEgr = (resMaxEgr.data && resMaxEgr.data[0] && resMaxEgr.data[0].max_reg) ? Number(resMaxEgr.data[0].max_reg) : 0;
             const nuevoRegLocalEgreso = String(maxValEgr + 1);
 
-            // Regla Max(reg_local)+1 para insumos_ingresos
             const resMaxIng = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(reg_local AS INTEGER)) as max_reg FROM insumos_ingresos`);
             const maxValIng = (resMaxIng.data && resMaxIng.data[0] && resMaxIng.data[0].max_reg) ? Number(resMaxIng.data[0].max_reg) : 0;
             const nuevoRegLocalIngreso = String(maxValIng + 1);
 
             const fechaActual = new Date().toISOString().split('T')[0];
 
-            // 1. Inserción de salida
             const sqlInsertEgr = `
                 INSERT INTO egresos_insumos (
                     reg_local, fecha, insumo, total_consumo, deposito_origen,
@@ -713,7 +927,6 @@ const ModuloStockInsumos = {
                 `TRASLADO INTERNO AUTOMÁTICO HACIA ${destino}`
             ]);
 
-            // 2. Inserción de entrada
             const sqlInsertIng = `
                 INSERT INTO insumos_ingresos (
                     reg_local, fecha, articulo, total, campo_depo,
@@ -744,7 +957,7 @@ const ModuloStockInsumos = {
 
         const estDestinosUnicos = [...new Set(this.parametros.cuadros.map(c => c.establecimiento).filter(Boolean))];
 
-        const matchStock = this.datosStock.find(x => x.articulo.trim().toUpperCase() === articulo.trim().toUpperCase());
+        const matchStock = this.datosStock.find(x => _normalizarTextoStock(x.articulo) === _normalizarTextoStock(articulo));
         const stockGlobalActual = matchStock ? matchStock.stock_actual : stockActual;
 
         container.innerHTML = `
@@ -854,7 +1067,7 @@ const ModuloStockInsumos = {
         const selectCuadro = document.getElementById('e_cuadro_select');
         if (!selectCuadro) return;
         if (!estSel) { selectCuadro.innerHTML = '<option value="">Esperando establecimiento destino...</option>'; return; }
-        const cuadrosFiltrados = this.parametros.cuadros.filter(c => (c.establecimiento || '').trim().toUpperCase() === estSel.trim().toUpperCase());
+        const cuadrosFiltrados = this.parametros.cuadros.filter(c => _normalizarTextoStock(c.establecimiento) === _normalizarTextoStock(estSel));
         selectCuadro.innerHTML = '<option value="">Seleccione Lote / Cuadro...</option>' + cuadrosFiltrados.map(c => `<option value="${c.reg_local || c.id}">${c.campo || 'SIN LOTE'} — ${c.lote || 'S/D'} (${c.sup_total || 0} Ha)</option>`).join('');
     },
 
@@ -926,8 +1139,8 @@ const ModuloStockInsumos = {
     m_ejecutarConsumo: async function(deposito, articulo, stockActual) {
         const cantidad = parseFloat(document.getElementById('e_cant_input').value) || 0;
         const estDestino = document.getElementById('e_est_destino').value;
-        if (!estDestino) return window.ComponentesUI ? window.ComponentesUI.notifica("⚠️ Seleccione Establecimiento destino.") : alert("⚠️ Seleccione Establecimiento destino.");
-        if (cantidad <= 0 || cantidad > stockActual) return window.ComponentesUI ? window.ComponentesUI.notifica("⚠️ Cantidad excedida o inválida.") : alert("⚠️ Cantidad excedida.");
+        if (!estDestino) return alert("⚠️ Seleccione Establecimiento destino.");
+        if (cantidad <= 0 || cantidad > stockActual) return alert("⚠️ Cantidad excedida.");
         
         const btnSave = document.getElementById('btn-guardar-egreso-local');
         if (btnSave) { btnSave.disabled = true; btnSave.innerText = "DESPACHANDO..."; }
@@ -985,11 +1198,11 @@ const ModuloStockInsumos = {
 
     m_exportarExcel: function() {
         if (!this.datosStock || this.datosStock.length === 0) return alert("No existen registros.");
-        const headers = ["ARTICULO", "GRUPO / FAMILIA", "TOTAL ENTRADAS", "TOTAL CONSUMOS", "STOCK NETO", "UNIDAD"];
+        const headers = ["ARTICULO", "RUBRO", "SUB-RUBRO", "TOTAL ENTRADAS", "TOTAL CONSUMOS", "STOCK NETO", "UNIDAD"];
         let csvContent = "\uFEFF" + headers.join(";") + "\n";
 
         this.datosStock.forEach(s => {
-            csvContent += [`"${s.articulo}"`, `"${s.tipo_insumos || s.descripcion}"`, s.entradas, s.salidas, s.stock_actual, `"${s.unidad}"`].join(";") + "\n";
+            csvContent += [`"${s.articulo}"`, `"${s.rubro || 'SIN RUBRO'}"`, `"${s.sub_rubro || 'SIN SUB-RUBRO'}"`, s.entradas, s.salidas, s.stock_actual, `"${s.unidad}"`].join(";") + "\n";
         });
 
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -1052,7 +1265,7 @@ const ModuloStockInsumos = {
                     <thead>
                         <tr>
                             <th>ARTÍCULO / CONCEPTO MAESTRO</th>
-                            <th>GRUPO / FAMILIA</th>
+                            <th>RUBRO / SUB-RUBRO</th>
                             <th style="text-align:right;">TOTAL ENTRADAS</th>
                             <th style="text-align:right;">TOTAL CONSUMOS</th>
                             <th style="text-align:right;">STOCK NETO</th>
@@ -1065,7 +1278,7 @@ const ModuloStockInsumos = {
                             return `
                                 <tr>
                                     <td><b>${s.articulo}</b></td>
-                                    <td>${s.tipo_insumos || s.descripcion || 'GENERAL'}</td>
+                                    <td>${s.rubro || 'SIN RUBRO'} · ${s.sub_rubro || 'SIN SUB-RUBRO'}</td>
                                     <td style="text-align:right;">${s.entradas.toLocaleString('es-AR')} ${s.unidad}</td>
                                     <td style="text-align:right; color:#E0342A;">-${s.salidas.toLocaleString('es-AR')} ${s.unidad}</td>
                                     <td style="text-align:right; font-weight:bold; color:${crit ? '#E0342A' : '#1E6B4C'};">${s.stock_actual.toLocaleString('es-AR')} ${s.unidad}</td>

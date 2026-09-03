@@ -1,6 +1,7 @@
 /**
  * bases.js - Esquema Maestro SQLite Local (Offline-First)
  * Sistema: SALVUCCI GESTIÓN · AgroSoft J&L
+ * Arquitectura: Cola de borrado con triggers universales para replicación en Supabase
  */
 
 const Database = require('better-sqlite3');
@@ -32,6 +33,21 @@ db.pragma('journal_mode = WAL');
 function inicializarTablasLocales() {
     const initTransaction = db.transaction(() => {
 
+        // =====================================================================
+        // TABLA DE COLA PARA BORRADOS PENDIENTES DE SINCRONIZACIÓN
+        // =====================================================================
+        db.prepare(`
+            CREATE TABLE IF NOT EXISTS eliminaciones_pendientes (
+                id_cola INTEGER PRIMARY KEY AUTOINCREMENT,
+                tabla TEXT NOT NULL,
+                reg_local TEXT,
+                id_remoto INTEGER,
+                clave_primaria_valor TEXT,
+                fecha_borrado TEXT NOT NULL,
+                sincronizado INTEGER DEFAULT 0
+            )
+        `).run();
+
         // USUARIOS Y SESIÓN
         db.prepare(`
             CREATE TABLE IF NOT EXISTS usuarios (
@@ -39,6 +55,7 @@ function inicializarTablasLocales() {
                 usuario TEXT UNIQUE NOT NULL,
                 clave TEXT NOT NULL,
                 nombre TEXT,
+                correo TEXT,
                 rol TEXT DEFAULT 'OPERADOR',
                 ultimo_acceso TEXT,
                 sincronizado INTEGER DEFAULT 0
@@ -72,6 +89,7 @@ function inicializarTablasLocales() {
                 kg_mtr_silo NUMERIC,
                 campaña TEXT,
                 deposito TEXT,
+                ubicacion TEXT,
                 sincronizado INTEGER DEFAULT 0
             )
         `).run();
@@ -147,7 +165,7 @@ function inicializarTablasLocales() {
             )
         `).run();
 
-        // 6. CUADROS -> PK (reg_local)  <-- ESTO SOLUCIONA EL PROBLEMA
+        // 6. CUADROS -> PK (reg_local)
         db.prepare(`
             CREATE TABLE IF NOT EXISTS cuadros (
                 reg_local INTEGER PRIMARY KEY,
@@ -398,10 +416,196 @@ function inicializarTablasLocales() {
         db.prepare(`CREATE INDEX IF NOT EXISTS idx_campos_reg ON campos(reg_local)`).run();
         db.prepare(`CREATE INDEX IF NOT EXISTS idx_insumos_art ON insumos(articulo)`).run();
         db.prepare(`CREATE INDEX IF NOT EXISTS idx_plant_lote ON inventario_plantacion(lote)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_del_pend ON eliminaciones_pendientes(tabla, sincronizado)`).run();
+
+        // =====================================================================
+        // TRIGGERS UNIVERSALES AFTER DELETE (CAPTURA AUTOMÁTICA EN COLA)
+        // =====================================================================
+
+        // 1. Acopio Producción
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_acopio_produccion
+            AFTER DELETE ON acopio_produccion
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('acopio_produccion', CAST(OLD.registro_aco AS TEXT), OLD.registro_aco, CAST(OLD.registro_aco AS TEXT), datetime('now'), 0);
+            END;
+        `).run();
+
+        // 2. Campos
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_campos
+            AFTER DELETE ON campos
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('campos', OLD.reg_local, OLD.id, CAST(OLD.id AS TEXT), datetime('now'), 0);
+            END;
+        `).run();
+
+        // 3. Combustibles Ingresos
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_combustibles_ingresos
+            AFTER DELETE ON combustibles_ingresos
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('combustibles_ingresos', OLD.reg_local, OLD.id, OLD.reg_local, datetime('now'), 0);
+            END;
+        `).run();
+
+        // 4. Consumos Combustibles
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_consumos_combustibles
+            AFTER DELETE ON consumos_combustibles
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('consumos_combustibles', OLD.reg_local, NULL, OLD.reg_local, datetime('now'), 0);
+            END;
+        `).run();
+
+        // 5. Contratistas
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_contratistas
+            AFTER DELETE ON contratistas
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('contratistas', NULL, OLD.id, CAST(OLD.id AS TEXT), datetime('now'), 0);
+            END;
+        `).run();
+
+        // 6. Cuadros
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_cuadros
+            AFTER DELETE ON cuadros
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('cuadros', CAST(OLD.reg_local AS TEXT), OLD.id, CAST(OLD.reg_local AS TEXT), datetime('now'), 0);
+            END;
+        `).run();
+
+        // 7. Cultivos Variedades
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_cultivos_variedades
+            AFTER DELETE ON cultivos_variedades
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('cultivos_variedades', OLD.reg_local, NULL, OLD.reg_local, datetime('now'), 0);
+            END;
+        `).run();
+
+        // 8. Depósitos
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_depositos
+            AFTER DELETE ON depositos
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('depositos', OLD.reg_local, OLD.id, OLD.reg_local, datetime('now'), 0);
+            END;
+        `).run();
+
+        // 9. Egresos Forraje
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_egresos_forraje
+            AFTER DELETE ON egresos_forraje
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('egresos_forraje', OLD.registro, OLD.id, CAST(OLD.id AS TEXT), datetime('now'), 0);
+            END;
+        `).run();
+
+        // 10. Egresos Insumos
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_egresos_insumos
+            AFTER DELETE ON egresos_insumos
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('egresos_insumos', OLD.reg_local, OLD.id, OLD.reg_local, datetime('now'), 0);
+            END;
+        `).run();
+
+        // 11. Insumos (Catálogo Maestro)
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_insumos
+            AFTER DELETE ON insumos
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('insumos', OLD.reg_local, NULL, OLD.reg_local, datetime('now'), 0);
+            END;
+        `).run();
+
+        // 12. Insumos Ingresos
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_insumos_ingresos
+            AFTER DELETE ON insumos_ingresos
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('insumos_ingresos', OLD.reg_local, OLD.id, OLD.reg_local, datetime('now'), 0);
+            END;
+        `).run();
+
+        // 13. Inventario Plantación
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_inventario_plantacion
+            AFTER DELETE ON inventario_plantacion
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('inventario_plantacion', OLD.reg_local, OLD.id, OLD.reg_local, datetime('now'), 0);
+            END;
+        `).run();
+
+        // 14. Movimientos Interempresas
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_movimientos_interempresas
+            AFTER DELETE ON movimientos_interempresas
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('movimientos_interempresas', NULL, OLD.id, CAST(OLD.id AS TEXT), datetime('now'), 0);
+            END;
+        `).run();
+
+        // 15. P Producción
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_p_produccion
+            AFTER DELETE ON p_produccion
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('p_produccion', CAST(OLD.reg_local AS TEXT), OLD.id, CAST(OLD.reg_local AS TEXT), datetime('now'), 0);
+            END;
+        `).run();
+
+        // 16. Proveedores
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_proveedores
+            AFTER DELETE ON proveedores
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('proveedores', NULL, NULL, OLD.proveedor, datetime('now'), 0);
+            END;
+        `).run();
+
+        // 17. Tipos Gastos
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_tipos_gastos
+            AFTER DELETE ON tipos_gastos
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('tipos_gastos', NULL, OLD.id, CAST(OLD.id AS TEXT), datetime('now'), 0);
+            END;
+        `).run();
+
+        // 18. Tipos Labores
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_tipos_labores
+            AFTER DELETE ON tipos_labores
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('tipos_labores', NULL, OLD.id_labor, CAST(OLD.id_labor AS TEXT), datetime('now'), 0);
+            END;
+        `).run();
+
     });
 
     initTransaction();
-    console.log("✅ [SQLite Local] Tablas maestras inicializadas.");
+    console.log("✅ [SQLite Local] Tablas maestras y triggers de borrado inicializados.");
 }
 
 inicializarTablasLocales();

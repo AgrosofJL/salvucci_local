@@ -1,8 +1,9 @@
 ﻿/**
- * ModuloStock: Panel de Auditoría Volumétrica e Inventario Real por Establecimiento
- * AgroSoft J&L - "Apple Soft Studio" Edition / Roboto Font Unificada
- * Mode: Local-First (Engine SQLite IPC) + "No me quites nada" + Max(registro)+1 + sincronizado = 0
+ * stock.js - Panel de Stock e Inventario Real con Visor Satelital y Asignación GPS
+ * Sistema: SALVUCCI / AgroSoft J&L
+ * Lenguaje Visual: Apple Soft Studio / Roboto Font
  */
+
 const ModuloStock = {
     datosSilos: [],
     datosEgresos: [],
@@ -10,8 +11,9 @@ const ModuloStock = {
     filtroEstablecimiento: 'TODOS', 
     filtroInfraestructura: 'TODOS', 
     filtroCultivo: 'TODOS',
+    googleMapsCargado: false,
+    googleApiKey: 'AIzaSyA374dJeJJ-IBirYrb_uTqRH9yrUK2VUaE',
 
-    // ESTO LO MODIFIQUE / ACA ES LO NUEVO: Helper IPC para ejecutar SQL en la base SQLite local
     m_ejecutarSqlLocal: async function(sql, params = []) {
         if (window.apiLocal && window.apiLocal.query) {
             return await window.apiLocal.query({ sql, params });
@@ -22,7 +24,6 @@ const ModuloStock = {
         throw new Error("No se encontró el puente IPC con la base de datos base local.");
     },
 
-    /* ESTO LO MODIFIQUE: Carga 100% Offline desde SQLite local */
     m_inicializar: async function() {
         const visor = document.getElementById('pantalla-dinamica');
         if (!visor) return;
@@ -46,7 +47,8 @@ const ModuloStock = {
                     ...s,
                     kg_disponibles_reales: neto,
                     kg_originales: Number(s.kg_en_silo) || 0,
-                    kg_mtr_silo: Number(s.kg_mtr_silo) || 0
+                    kg_mtr_silo: Number(s.kg_mtr_silo) || 0,
+                    ubicacion: s.ubicacion || ''
                 };
             });
 
@@ -74,7 +76,341 @@ const ModuloStock = {
         }
     },
 
-    /* ACA ES LO NUEVO: Se añade el botón "Sincronizar All" en la esquina superior derecha */
+    m_asegurarGoogleMaps: function() {
+        return new Promise((resolve) => {
+            if (window.google && window.google.maps) {
+                this.googleMapsCargado = true;
+                return resolve(true);
+            }
+            const script = document.createElement('script');
+            script.src = `https://maps.googleapis.com/maps/api/js?key=${this.googleApiKey}&libraries=geometry`;
+            script.async = true;
+            script.onload = () => {
+                this.googleMapsCargado = true;
+                resolve(true);
+            };
+            script.onerror = () => {
+                console.error("No se pudo cargar Google Maps SDK.");
+                resolve(false);
+            };
+            document.head.appendChild(script);
+        });
+    },
+
+    m_abrirModalMapaGlobal: async function(idAcopioEnfocar = null) {
+    this.m_asegurarModalBase();
+    const modal = document.getElementById('modal-agrosoft');
+    const container = document.getElementById('modal-formulario');
+    const modalContent = document.querySelector('.modal-apple-content');
+    
+    if (modalContent) modalContent.style.maxWidth = '1100px';
+    if (modal) modal.style.display = 'flex';
+    
+    document.getElementById('modal-titulo').innerText = "🌍 VISTA SATELITAL DE ACOPIOS (ESTILO EARTH)";
+
+    container.innerHTML = `
+        <div style="display:flex; flex-direction:column; gap:10px; font-family:'Roboto', sans-serif;">
+            <div style="display:grid; grid-template-columns: 1fr 360px; gap:14px;">
+                <!-- CONTENEDOR TIPO GOOGLE EARTH -->
+                <div id="contenedor-google-earth" style="width:100%; height:580px; border-radius:14px; border:1.5px solid #E0DCD4; background:#000000; overflow:hidden; position:relative;">
+                    <div id="mapa-earth-canvas" style="width:100%; height:100%;"></div>
+                    <div style="position:absolute; top:12px; left:12px; background:rgba(18, 22, 28, 0.75); backdrop-filter:blur(8px); padding:6px 12px; border-radius:8px; color:#FFFFFF; font-size:0.75rem; font-weight:600; z-index:5;">
+                        📍 Haga clic en el satélite para colocar o reubicar acopios
+                    </div>
+                </div>
+
+                <!-- PANEL INTERACTIVO DE ACOPIOS -->
+                <div id="panel-interactivo-acopio" style="background:#FFFFFF; border:1.5px solid #E0DCD4; border-radius:14px; padding:16px; height:580px; display:flex; flex-direction:column; box-sizing:border-box;">
+                    <div style="border-bottom:1.5px solid #E0DCD4; padding-bottom:10px; margin-bottom:10px;">
+                        <span style="font-size:0.65rem; color:#6B6255; font-weight:800; text-transform:uppercase; letter-spacing:0.5px;">Gestión Geográfica</span>
+                        <h4 id="lbl-earth-titulo" style="margin:2px 0 0 0; font-size:1rem; color:#123F2C; font-weight:800;">Punto Seleccionado</h4>
+                        <div id="lbl-earth-coords" style="font-size:0.72rem; color:#0071E3; font-family:monospace; margin-top:2px;">Haga clic en el terreno satelital</div>
+                    </div>
+
+                    <div id="lista-acopios-earth" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px;" class="scroll-apple">
+                        <div style="text-align:center; padding:40px 10px; color:#8E8E93; font-size:0.8rem; line-height:1.4;">
+                            Toca un punto en el mapa para vincular pilas activas o consultar las existentes en ese lugar.
+                        </div>
+                    </div>
+
+                    <div id="acciones-earth-footer" style="border-top:1.5px solid #E0DCD4; padding-top:12px; margin-top:10px; display:none;">
+                        <button type="button" id="btn-guardar-coordenadas-earth" style="width:100%; background:#1E6B4C; color:#FFFFFF; border:none; padding:10px; border-radius:8px; font-weight:800; font-size:0.8rem; cursor:pointer; box-shadow:0 4px 12px rgba(30,107,76,0.25);">
+                            ASIGNAR ESTE PUNTO A SELECCIONADOS
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    const ok = await this.m_asegurarGoogleMaps();
+    if (!ok) {
+        document.getElementById('contenedor-google-earth').innerHTML = `<div style="color:#E0342A; padding:20px; font-weight:bold;">Error de conexión con Google Maps API.</div>`;
+        return;
+    }
+
+    // Configuración estilo Google Earth: Vista híbrida satelital y controles limpios
+    const canvas = document.getElementById('mapa-earth-canvas');
+    const map = new google.maps.Map(canvas, {
+        zoom: 15,
+        center: { lat: -39.1000, lng: -67.0800 },
+        mapTypeId: 'hybrid',
+        tilt: 45, // Ángulo oblicuo estilo Earth
+        heading: 0,
+        mapTypeControl: true,
+        mapTypeControlOptions: { style: google.maps.MapTypeControlStyle.DROPDOWN_MENU },
+        streetViewControl: false,
+        fullscreenControl: false
+    });
+
+    const parsearCoords = (str) => {
+        if (!str || typeof str !== 'string') return null;
+        const limpia = str.replace(/[()\[\]]/g, '').replace(';', ',');
+        const partes = limpia.split(',').map(p => parseFloat(p.trim()));
+        if (partes.length === 2 && !isNaN(partes[0]) && !isNaN(partes[1])) {
+            return { lat: partes[0], lng: partes[1] };
+        }
+        return null;
+    };
+
+    let pinActivo = null;
+    let coordenadaSeleccionada = null;
+
+    // Actualiza el panel lateral mostrando qué hay en ese punto y qué pilas se pueden asociar
+    const desplegarGestionPunto = (latLng, acopiosEnPunto = []) => {
+        coordenadaSeleccionada = `${latLng.lat.toFixed(6)}, ${latLng.lng.toFixed(6)}`;
+        
+        document.getElementById('lbl-earth-coords').innerText = `GPS: ${coordenadaSeleccionada}`;
+        document.getElementById('lbl-earth-titulo').innerText = acopiosEnPunto.length > 0 
+            ? `Acopio Activo (${acopiosEnPunto.length} Pilas)` 
+            : `Punto Satelital Libre`;
+
+        const contenedor = document.getElementById('lista-acopios-earth');
+        const footer = document.getElementById('acciones-earth-footer');
+        footer.style.display = 'block';
+
+        const acopiosActivos = this.listaAcopioCalculado.filter(s => s.kg_disponibles_reales > 0);
+
+        contenedor.innerHTML = `
+            <div style="font-size:0.7rem; color:#6B6255; margin-bottom:4px; font-weight:700; text-transform:uppercase;">
+                Marque las pilas que están en este punto:
+            </div>
+            ${acopiosActivos.map(s => {
+                const tieneEsteGps = s.ubicacion && s.ubicacion.replace(/\s+/g, '') === coordenadaSeleccionada.replace(/\s+/g, '');
+                const esSilo = s.silo_n && String(s.silo_n).trim() !== "";
+                const infra = esSilo ? `Silo N° ${s.silo_n}` : `Depósito: ${s.deposito || 'Galpón'}`;
+
+                return `
+                    <label style="display:flex; align-items:flex-start; gap:10px; background:#F8FAFC; border:1px solid ${tieneEsteGps ? '#1E6B4C' : '#E0DCD4'}; padding:9px 10px; border-radius:8px; cursor:pointer; font-size:0.75rem;">
+                        <input type="checkbox" class="chk-earth-acopio" value="${s.registro_aco}" ${tieneEsteGps ? 'checked' : ''} style="margin-top:3px; accent-color:#1E6B4C; width:15px; height:15px;">
+                        <div style="flex:1; min-width:0;">
+                            <div style="display:flex; justify-content:space-between;">
+                                <strong style="color:#123F2C;">${infra}</strong>
+                                <span style="font-weight:800; color:#1E6B4C;">${s.kg_disponibles_reales.toLocaleString('es-AR')} KG</span>
+                            </div>
+                            <div style="color:#6B6255; font-size:0.7rem;">${s.cultivo || 'S/D'} · Lote: ${s.lote || '0'}</div>
+                            <div style="color:#8E8E93; font-size:0.65rem;">📍 ${s.establecimiento || 'Campo'}</div>
+                        </div>
+                    </label>
+                `;
+            }).join('')}
+        `;
+
+        document.getElementById('btn-guardar-coordenadas-earth').onclick = async () => {
+            const seleccionados = [...document.querySelectorAll('.chk-earth-acopio:checked')].map(c => parseInt(c.value));
+            if (seleccionados.length === 0) {
+                alert("⚠️ Seleccione al menos una pila para fijar su coordenada.");
+                return;
+            }
+
+            const btn = document.getElementById('btn-guardar-coordenadas-earth');
+            btn.disabled = true;
+            btn.innerText = "GUARDANDO EN SQLITE...";
+
+            try {
+                for (const regId of seleccionados) {
+                    await ModuloStock.m_ejecutarSqlLocal(
+                        `UPDATE acopio_produccion SET ubicacion = ?, sincronizado = 0 WHERE registro_aco = ?`,
+                        [coordenadaSeleccionada, regId]
+                    );
+                }
+
+                if (window.ComponentesUI && window.ComponentesUI.notificar) {
+                    window.ComponentesUI.notificar(`✅ ${seleccionados.length} pila(s) geolocalizada(s) con éxito.`);
+                }
+
+                await ModuloStock.m_inicializar();
+                ModuloStock.m_abrirModalMapaGlobal();
+            } catch (e) {
+                alert("Error al actualizar: " + e.message);
+                btn.disabled = false;
+                btn.innerText = "ASIGNAR ESTE PUNTO A SELECCIONADOS";
+            }
+        };
+    };
+
+    // 1. Dibujar acopios que ya tienen coordenadas
+    const bounds = new google.maps.LatLngBounds();
+    let hayPuntos = false;
+
+    this.listaAcopioCalculado.forEach(s => {
+        const pos = parsearCoords(s.ubicacion);
+        if (!pos) return;
+
+        hayPuntos = true;
+        bounds.extend(pos);
+
+        const marker = new google.maps.Marker({
+            position: pos,
+            map: map,
+            title: `Silo ${s.silo_n || s.deposito}`,
+            icon: {
+                path: google.maps.SymbolPath.CIRCLE,
+                scale: 10,
+                fillColor: s.kg_disponibles_reales > 0 ? '#1E6B4C' : '#8E8E93',
+                fillOpacity: 0.95,
+                strokeColor: '#FFFFFF',
+                strokeWeight: 2.5
+            }
+        });
+
+        marker.addListener('click', () => {
+            if (pinActivo) pinActivo.setMap(null);
+            const pilasMismoPunto = ModuloStock.listaAcopioCalculado.filter(x => x.ubicacion === s.ubicacion);
+            desplegarGestionPunto(pos, pilasMismoPunto);
+            map.panTo(pos);
+        });
+
+        if (idAcopioEnfocar && String(s.registro_aco) === String(idAcopioEnfocar)) {
+            map.setCenter(pos);
+            map.setZoom(17);
+            const pilasMismoPunto = ModuloStock.listaAcopioCalculado.filter(x => x.ubicacion === s.ubicacion);
+            desplegarGestionPunto(pos, pilasMismoPunto);
+        }
+    });
+
+    if (hayPuntos && !idAcopioEnfocar) {
+        map.fitBounds(bounds);
+    }
+
+    // 2. Interacción al hacer clic libre en cualquier punto del terreno satelital
+    map.addListener('click', (e) => {
+        const latLng = { lat: e.latLng.lat(), lng: e.latLng.lng() };
+
+        if (pinActivo) pinActivo.setMap(null);
+        pinActivo = new google.maps.Marker({
+            position: latLng,
+            map: map,
+            icon: {
+                path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW,
+                scale: 6,
+                fillColor: '#0071E3',
+                fillOpacity: 1,
+                strokeColor: '#FFFFFF',
+                strokeWeight: 2
+            }
+        });
+
+        desplegarGestionPunto(latLng, []);
+    });
+},
+
+    m_asignarCoordACualquiera: function(coordString) {
+    const cont = document.getElementById('lista-pilas-en-punto');
+    const lbl = document.getElementById('lbl-punto-activo');
+    if (!cont) return;
+
+    if (lbl) lbl.innerText = "Asignación Masiva de GPS";
+
+    // Generar lista con checkboxes para seleccionar múltiples pilas a la vez
+    const itemsCheckboxes = this.listaAcopioCalculado.map(s => {
+        const esSilo = s.silo_n && String(s.silo_n).trim() !== "";
+        const infra = esSilo ? `Silo N° ${s.silo_n}` : `Depósito: ${s.deposito || 'Galpón'}`;
+        const tieneGps = s.ubicacion && s.ubicacion.includes(',');
+
+        return `
+            <label style="display:flex; align-items:flex-start; gap:10px; background:#FFFFFF; border:1px solid #E0DCD4; padding:8px 10px; border-radius:8px; cursor:pointer; font-size:0.75rem; user-select:none;">
+                <input type="checkbox" class="chk-acopio-gps" value="${s.registro_aco}" style="margin-top:2px; cursor:pointer; width:15px; height:15px; accent-color:#0071E3;">
+                <div style="flex:1; min-width:0;">
+                    <div style="font-weight:800; color:#123F2C;">[#${s.registro_aco}] ${infra}</div>
+                    <div style="color:#6B6255; font-size:0.7rem;">${(s.cultivo || 'S/D').toUpperCase()} · Campo: ${s.campo || 'S/D'}</div>
+                    ${tieneGps ? `<div style="color:#8E8E93; font-size:0.65rem;">GPS Actual: ${s.ubicacion}</div>` : `<div style="color:#E08600; font-size:0.65rem; font-weight:bold;">⚠️ Sin GPS</div>`}
+                </div>
+            </label>
+        `;
+    }).join('');
+
+    cont.innerHTML = `
+        <div style="background:#F9FAFB; border:1.5px solid #0071E3; border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:10px; height:100%; box-sizing:border-box;">
+            <div style="background:#FFFFFF; border:1px solid #E0DCD4; padding:8px 10px; border-radius:8px;">
+                <span style="font-size:0.65rem; color:#6B6255; text-transform:uppercase; font-weight:800; display:block;">Punto Satelital Seleccionado</span>
+                <b style="font-family:monospace; color:#0071E3; font-size:0.85rem;">${coordString}</b>
+            </div>
+
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size:0.7rem; font-weight:800; color:#123F2C; text-transform:uppercase;">Seleccione las Pilas</span>
+                <div style="display:flex; gap:6px;">
+                    <button type="button" onclick="document.querySelectorAll('.chk-acopio-gps').forEach(c => c.checked = true)" style="background:none; border:none; color:#0071E3; font-size:0.68rem; font-weight:bold; cursor:pointer; padding:0;">Todos</button>
+                    <span style="color:#DDE1E7;">|</span>
+                    <button type="button" onclick="document.querySelectorAll('.chk-acopio-gps').forEach(c => c.checked = false)" style="background:none; border:none; color:#6E6E73; font-size:0.68rem; font-weight:bold; cursor:pointer; padding:0;">Ninguno</button>
+                </div>
+            </div>
+
+            <div id="contenedor-checks-gps" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:6px; padding-right:4px;" class="scroll-apple">
+                ${itemsCheckboxes}
+            </div>
+
+            <div style="display:flex; gap:8px; border-top:1px solid #E0DCD4; padding-top:10px;">
+                <button type="button" onclick="ModuloStock.m_abrirModalMapaGlobal()" style="flex:1; background:#F0F2F5; color:#1D1D1F; border:1px solid #DDE1E7; padding:8px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer;">
+                    CANCELAR
+                </button>
+                <button type="button" id="btn-confirmar-guardar-gps" style="flex:1; background:#0071E3; color:#FFFFFF; border:none; padding:8px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer; box-shadow:0 4px 10px rgba(0,113,227,0.25);">
+                    GUARDAR GPS
+                </button>
+            </div>
+        </div>
+    `;
+
+    document.getElementById('btn-confirmar-guardar-gps').onclick = async () => {
+        const checksSeleccionados = [...document.querySelectorAll('.chk-acopio-gps:checked')].map(c => parseInt(c.value));
+        
+        if (checksSeleccionados.length === 0) {
+            alert("⚠️ Marque al menos una pila o silo para asignarle la coordenada.");
+            return;
+        }
+
+        const btnGuardar = document.getElementById('btn-confirmar-guardar-gps');
+        btnGuardar.disabled = true;
+        btnGuardar.innerText = "GUARDANDO...";
+
+        try {
+            // Actualizar todas las pilas seleccionadas de forma masiva
+            for (const regId of checksSeleccionados) {
+                await ModuloStock.m_ejecutarSqlLocal(
+                    `UPDATE acopio_produccion SET ubicacion = ?, sincronizado = 0 WHERE registro_aco = ?`,
+                    [coordString, regId]
+                );
+            }
+
+            if (window.ComponentesUI && window.ComponentesUI.notificar) {
+                window.ComponentesUI.notificar(`✅ Coordenada asignada a ${checksSeleccionados.length} pila(s).`);
+            } else {
+                alert(`✅ Coordenada satelital asignada a ${checksSeleccionados.length} pila(s).`);
+            }
+
+            // Recargar datos y volver a abrir la vista general sin filtrar a una sola
+            await ModuloStock.m_inicializar();
+            ModuloStock.m_abrirModalMapaGlobal();
+
+        } catch (err) {
+            console.error("Error al guardar GPS:", err);
+            alert("Error al actualizar coordenadas: " + err.message);
+            btnGuardar.disabled = false;
+            btnGuardar.innerText = "GUARDAR GPS";
+        }
+    };
+},
+
     m_dibujarStock: function() {
         const visor = document.getElementById('pantalla-dinamica');
         if (!visor) return;
@@ -300,13 +636,17 @@ const ModuloStock = {
 
             ${ComponentesUI.botonVolverHTML('PRODUCCION')}
             <div class="stock-layout animated fadeIn">
-                <div class="modulo-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px;">
+                <div class="modulo-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; flex-wrap: wrap; gap: 10px;">
                     <div>
                         <h2 style="margin:0; font-weight: 800; font-size: 1.5rem; letter-spacing: -0.5px; color:#1D1D1F;">Panel de Stock e Inventario Real</h2>
                         <p style="margin:4px 0 0 0; font-size:0.82rem; color:#6E6E73;">Auditoría volumétrica consolidada de granos y forrajes Local</p>
                     </div>
                     
-                    <div style="display: flex; gap: 10px; align-items: center;">
+                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                        <button class="btn-export-outline" onclick="ModuloStock.m_abrirModalMapaGlobal()" style="background:#0071E3; color:#FFF; border:none; box-shadow: 0 4px 12px rgba(0,113,227,0.25);">
+                            <i data-lucide="map-pin" style="width:14px; height:14px;"></i> MAPA SATELITAL
+                        </button>
+
                         <select class="select-stock-apple" onchange="ModuloStock.m_filtrarEstablecimiento(this.value)">
                             <option value="TODOS" ${this.filtroEstablecimiento === 'TODOS' ? 'selected' : ''}>🌍 TODOS LOS CAMPOS</option>
                             ${establecimientosUnicos.map(e => `<option value="${e}" ${this.filtroEstablecimiento === e ? 'selected' : ''}>📍 ${e.toUpperCase()}</option>`).join('')}
@@ -330,10 +670,6 @@ const ModuloStock = {
                             <i data-lucide="sheet" style="width:14px; height:14px;"></i> EXCEL
                         </button>
 
-                        <!-- ACA ES LO NUEVO: Botón de Sincronización Global -->
-                        <button class="btn-export-outline" onclick="window.sincronizar_todo && window.sincronizar_todo()" style="background:#0071e3; color:#FFF; border:none; box-shadow: 0 4px 12px rgba(0,113,227,0.22);" title="Sincronizar todo con la base central">
-                            <i data-lucide="refresh-cw" style="width:14px; height:14px;"></i> SINCRONIZAR ALL
-                        </button>
                     </div>
                 </div>
 
@@ -345,7 +681,6 @@ const ModuloStock = {
 
                 <div class="split-view-stock">
                     
-                    <!-- VISTA PRINCIPAL: Celdas agrupadas visualmente por Establecimiento -->
                     <div class="wrapper-silos-scroll scroll-apple">
                         ${Object.keys(gruposPorEstablecimiento).length === 0 ? 
                             `<div style="text-align:center; padding:40px; color:#6E6E73; background:#FFFFFF; border-radius: 12px; border:1px solid #E4E7EC; font-weight:500;">No se registraron infraestructuras de stock con los filtros seleccionados.</div>` :
@@ -379,12 +714,16 @@ const ModuloStock = {
                                                        </div>`;
 
                                                 const labelInfra = esSiloFisico ? `SILO ${s.silo_n}` : `DEPÓSITO: ${s.deposito || 'G-Gral'}`;
+                                                const tieneCoords = s.ubicacion && s.ubicacion.includes(',');
 
                                                 return `
                                                     <div class="silo-visual-card" onclick="ModuloStock.m_abrirMenuAcciones('${s.registro_aco}')" style="cursor:pointer;">
                                                         ${contenedorGrafico}
                                                         <div class="silo-info">
-                                                            <small>${labelInfra}</small>
+                                                            <div style="display:flex; justify-content:space-between; width:100%; align-items:center;">
+                                                                <small>${labelInfra}</small>
+                                                                ${tieneCoords ? `<span onclick="event.stopPropagation(); ModuloStock.m_abrirModalMapaGlobal('${s.registro_aco}')" title="Ver en Mapa Satelital" style="color:#0071E3; font-weight:800; font-size:0.65rem; cursor:pointer;">📍 MAPA</span>` : ''}
+                                                            </div>
                                                             <strong>${s.kg_disponibles_reales.toLocaleString('es-AR')} kg</strong>
                                                             <p>${(s.cultivo || 'S/D').toUpperCase()}</p>
                                                             <span>Lote/Campo: ${s.campo || 'S/D'}</span>
@@ -399,7 +738,6 @@ const ModuloStock = {
                         }
                     </div>
 
-                    <!-- PANEL DERECHO: Distribución porcentual de granos -->
                     <div class="panel-distribucion-stock scroll-apple">
                         <h3 class="cabecera-inmovilizada">Distribución por Cultivo</h3>
                         <div style="margin-top: 15px;"> 
@@ -441,6 +779,8 @@ const ModuloStock = {
         
         document.getElementById('modal-titulo').innerText = `CONTROL INTERNO: ${silo.silo_n ? 'SILO ' + silo.silo_n : 'DEPÓSITO ' + (silo.deposito || '')}`;
 
+        const tieneCoords = silo.ubicacion && silo.ubicacion.includes(',');
+
         container.innerHTML = `
             <style>
                 .menu-acciones-grid { display: flex; flex-direction: column; gap: 10px; font-family: 'Roboto', sans-serif; padding: 2px; }
@@ -478,8 +818,21 @@ const ModuloStock = {
                 <div style="background: #F6F7F9; border: 1px solid #E4E7EC; padding: 12px 14px; border-radius: 10px; margin-bottom: 4px; font-size: 0.8rem; color: #6E6E73; line-height: 1.4;">
                     <span>Establecimiento: <b style="color:#1D1D1F;">${silo.establecimiento}</b></span><br>
                     <span>Variedad Forraje: <b style="color:${this.m_colorCultivo(silo.cultivo)};">${silo.cultivo}</b></span><br>
-                    <span>Saldo Neto Real: <b style="color:#1FA958;">${silo.kg_disponibles_reales.toLocaleString('es-AR')} kg</b></span>
+                    <span>Saldo Neto Real: <b style="color:#1FA958;">${silo.kg_disponibles_reales.toLocaleString('es-AR')} kg</b></span><br>
+                    <span>Coordenadas GPS: <b style="color:#0071E3;">${silo.ubicacion || 'Sin geolocalización'}</b></span>
                 </div>
+
+                ${tieneCoords ? `
+                <button class="btn-menu-apple" onclick="document.getElementById('modal-agrosoft').style.display='none'; ModuloStock.m_abrirModalMapaGlobal('${idAco}');">
+                    <div class="icon-box-apple" style="background: rgba(0, 113, 227, 0.1); color: #0071e3;">
+                        <i data-lucide="map" style="width: 18px; height: 18px;"></i>
+                    </div>
+                    <div>
+                        <strong style="display:block; font-size:0.85rem; color:#1D1D1F;">Ver en Mapa Satelital</strong>
+                        <span style="font-size:0.7rem; color:#6E6E73;">Abrir posición geográfica satelital exacta</span>
+                    </div>
+                </button>
+                ` : ''}
 
                 <button class="btn-menu-apple" onclick="document.getElementById('modal-agrosoft').style.display='none'; ModuloStock.m_abrirModalEgreso(null, '${idAco}');">
                     <div class="icon-box-apple" style="background: rgba(31, 169, 88, 0.1); color: #1FA958;">
@@ -491,7 +844,7 @@ const ModuloStock = {
                     </div>
                 </button>
 
-                <button class="btn-menu-apple" onclick="document.getElementById('modal-agrosoft').style.display='none'; if(typeof ModuloAcopio !== 'undefined' && ModuloAcopio.m_abrirModalMovimientoRapido) { ModuloAcopio.m_abrirModalMovimientoRapido('${idAco}'); } else { window.ComponentesUI ? window.ComponentesUI.notifica('⚠️ Cargue el Módulo de Acopio para realizar traslados.') : alert('⚠️ Cargue el Módulo de Acopio para traslados.'); }">
+                <button class="btn-menu-apple" onclick="document.getElementById('modal-agrosoft').style.display='none'; if(typeof ModuloAcopio !== 'undefined' && ModuloAcopio.m_abrirModalMovimientoRapido) { ModuloAcopio.m_abrirModalMovimientoRapido('${idAco}'); } else { alert('Módulo de Acopio requerido.'); }">
                     <div class="icon-box-apple" style="background: rgba(224, 134, 0, 0.1); color: #E08600;">
                         <i data-lucide="move" style="width: 18px; height: 18px;"></i>
                     </div>
@@ -501,13 +854,13 @@ const ModuloStock = {
                     </div>
                 </button>
 
-                <button class="btn-menu-apple" onclick="document.getElementById('modal-agrosoft').style.display='none'; if(typeof ModuloAcopio !== 'undefined' && ModuloAcopio.m_abrirModalAcopioRapido) { const s = ModuloStock.listaAcopioCalculado.find(x => x.registro_aco == '${idAco}'); ModuloAcopio.m_abrirModalAcopioRapido(s); } else { window.ComponentesUI ? window.ComponentesUI.notifica('⚠️ Cargue el Módulo de Acopio para editar parámetros estructurales.') : alert('⚠️ Cargue el Módulo de Acopio para editar.'); }">
+                <button class="btn-menu-apple" onclick="document.getElementById('modal-agrosoft').style.display='none'; if(typeof ModuloAcopio !== 'undefined' && ModuloAcopio.m_abrirModalAcopioRapido) { const s = ModuloStock.listaAcopioCalculado.find(x => x.registro_aco == '${idAco}'); ModuloAcopio.m_abrirModalAcopioRapido(s); } else { alert('Módulo de Acopio requerido.'); }">
                     <div class="icon-box-apple" style="background: rgba(0, 113, 227, 0.1); color: #0071e3;">
                         <i data-lucide="edit-3" style="width: 18px; height: 18px;"></i>
                     </div>
                     <div>
-                        <strong style="display:block; font-size:0.85rem; color:#1D1D1F;">Editar Parámetros / Ajustar</strong>
-                        <span style="font-size:0.7rem; color:#6E6E73;">Modificar densidades, metros o kilos brutos base</span>
+                        <strong style="display:block; font-size:0.85rem; color:#1D1D1F;">Editar Parámetros y GPS</strong>
+                        <span style="font-size:0.7rem; color:#6E6E73;">Modificar coordenadas, densidades o kilos brutos</span>
                     </div>
                 </button>
             </div>
@@ -637,7 +990,7 @@ const ModuloStock = {
                 <input type="hidden" id="e_variedad" value="${regEdicion?.variedad || ''}">
                 <input type="hidden" id="e_stock_limite" value="0">
                 <input type="hidden" id="e_id_edicion" value="${id || ''}">
-                <input type="hidden" id="e_estado_valor" value="Activo"> <!-- Siempre debe mostrar del detalle el estado activo -->
+                <input type="hidden" id="e_estado_valor" value="Activo">
 
                 <div class="modal-apple-footer" style="display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid #E4E7EC; padding-top: 16px; margin-top: 10px;">
                     <button class="btn-cancel-soft" id="btn-cancelar-egreso-local" style="background: #F0F2F5; color: #1D1D1F; border: none; padding: 10px 18px; font-weight: 700; border-radius: 8px; font-size: 0.8rem; cursor: pointer; font-family:'Roboto';">CANCELAR</button>
@@ -663,12 +1016,6 @@ const ModuloStock = {
         }
     },
     
-    m_uniqueid: function(prefix = '') {
-        const timestamp = Date.now().toString(36); 
-        const randomPart = Math.random().toString(36).substring(2, 7).toUpperCase(); 
-        return `${prefix}${timestamp}-${randomPart}`;
-    },
-
     m_recalcularMontoPro: function() {
         const kilos = parseFloat(document.getElementById('e_kilos').value) || 0;
         const precio = parseFloat(document.getElementById('e_imp_uni_dolar').value) || 0;
@@ -696,7 +1043,8 @@ const ModuloStock = {
         document.getElementById('e_info_stock').innerHTML = `
             Establecimiento: <b>${silo.establecimiento}</b><br>
             Métrica de Saldo Neto Real: <b style="color:#1FA958;">${Number(silo.kg_disponibles_reales).toLocaleString('es-AR')} KG</b><br>
-            Capacidad Teórica Inicial: <span>${Number(silo.kg_originales).toLocaleString('es-AR')} KG</span>
+            Capacidad Teórica Inicial: <span>${Number(silo.kg_originales).toLocaleString('es-AR')} KG</span><br>
+            GPS: <span style="color:#0071E3;">${silo.ubicacion || 'Sin coordenadas'}</span>
         `;
         this.m_validarEgreso();
     },
@@ -721,7 +1069,6 @@ const ModuloStock = {
         }
     },
 
-    /* ESTO LO MODIFIQUE / ACA ES LO NUEVO: Persistencia SQLite local con la regla Max(registro)+1, estado Activo y sincronizado = 0 */
     m_guardarTodo: async function() {
         const idAco = document.getElementById('e_silo_sel').value;
         const kilosSalida = parseFloat(document.getElementById('e_kilos').value);
@@ -750,7 +1097,6 @@ const ModuloStock = {
         
         try {
             if (idEdicion) {
-                // Actualización en SQLite local
                 const sqlUpdate = `
                     UPDATE egresos_forraje SET
                         remito = ?, cliente = ?, chofer = ?, patente_1 = ?, patente_2 = ?,
@@ -771,14 +1117,13 @@ const ModuloStock = {
                     porcetajeIva,
                     parseFloat(calculoTotalUsd.toFixed(2)),
                     parseFloat(calculoTotalArs.toFixed(0)),
-                    'Activo', // Siempre estado Activo
+                    'Activo',
                     "SI",
                     idEdicion,
                     idEdicion
                 ];
                 await this.m_ejecutarSqlLocal(sqlUpdate, paramsUpdate);
             } else {
-                // Regla: Max(registro)+1 para egresos_forraje en SQLite
                 const resMax = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(reg_local AS INTEGER)) as max_reg FROM egresos_forraje`);
                 const maxVal = (resMax.data && resMax.data[0] && resMax.data[0].max_reg) 
                     ? Number(resMax.data[0].max_reg) 
@@ -819,14 +1164,13 @@ const ModuloStock = {
                     porcetajeIva,
                     parseFloat(calculoTotalUsd.toFixed(2)),
                     parseFloat(calculoTotalArs.toFixed(0)),
-                    'Activo', // Siempre debe mostrar del detalle el estado activo
+                    'Activo',
                     "SI",
-                    0        // sincronizado = 0
+                    0
                 ];
 
                 await this.m_ejecutarSqlLocal(sqlInsert, paramsInsert);
 
-                // Descontar volumetría física local en acopio_produccion
                 const nuevoStockFisico = silo.kg_originales - kilosSalida;
                 const nuevosMtrs = silo.kg_mtr_silo > 0 ? parseFloat((nuevoStockFisico / silo.kg_mtr_silo).toFixed(2)) : 0;
                 
@@ -838,7 +1182,7 @@ const ModuloStock = {
 
             document.getElementById('modal-agrosoft').style.display = 'none';
             await this.m_inicializar();
-            if (window.ComponentesUI) window.ComponentesUI.notifica("✅ Despacho guardado en SQLite local. Listo para Sincronizar.");
+            if (window.ComponentesUI) window.ComponentesUI.notifica("✅ Despacho guardado en SQLite local.");
         } catch (err) {
             console.error("❌ Error en la base de datos local SQLite:", err);
             if (window.ComponentesUI) window.ComponentesUI.notifica("Error en la operación local: " + err.message);
@@ -935,7 +1279,7 @@ const ModuloStock = {
         doc.text(`Generado: ${new Date().toLocaleString('es-AR')}`, anchoPagina - 12, 10, { align: 'right' });
         doc.text(this._m_infoFiltroExport(), anchoPagina - 12, 16, { align: 'right' });
 
-        const cabeceras = [['INFRAESTRUCTURA', 'ESTABLECIMIENTO', 'CAMPO', 'CULTIVO', 'CAMPAÑA', 'KG ORIGINALES', 'KG EGRESADOS', 'STOCK NETO (KG)']];
+        const cabeceras = [['INFRAESTRUCTURA', 'ESTABLECIMIENTO', 'CAMPO', 'CULTIVO', 'CAMPAÑA', 'GPS', 'KG ORIGINALES', 'KG EGRESADOS', 'STOCK NETO (KG)']];
 
         let sumaOriginal = 0;
         let sumaEgresado = 0;
@@ -952,6 +1296,7 @@ const ModuloStock = {
                 s.campo || '-',
                 `${s.cultivo || '-'}${s.variedad ? ' (' + s.variedad + ')' : ''}`,
                 s.campaña || '-',
+                s.ubicacion || '-',
                 s.kg_originales.toLocaleString('es-AR'),
                 egresado.toLocaleString('es-AR'),
                 s.kg_disponibles_reales.toLocaleString('es-AR')
@@ -967,12 +1312,12 @@ const ModuloStock = {
             headStyles: { fillColor: azul, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7.5 },
             alternateRowStyles: { fillColor: [250, 251, 252] },
             columnStyles: {
-                5: { halign: 'right' },
                 6: { halign: 'right' },
-                7: { halign: 'right' }
+                7: { halign: 'right' },
+                8: { halign: 'right' }
             },
             foot: [[
-                { content: `TOTAL DE INFRAESTRUCTURAS: ${datos.length}`, colSpan: 5, styles: { halign: 'left', fontStyle: 'bold', fillColor: [246, 247, 249], textColor: [30, 30, 30] } },
+                { content: `TOTAL DE INFRAESTRUCTURAS: ${datos.length}`, colSpan: 6, styles: { halign: 'left', fontStyle: 'bold', fillColor: [246, 247, 249], textColor: [30, 30, 30] } },
                 { content: sumaOriginal.toLocaleString('es-AR'), styles: { halign: 'right', fontStyle: 'bold', fillColor: [246, 247, 249] } },
                 { content: sumaEgresado.toLocaleString('es-AR'), styles: { halign: 'right', fontStyle: 'bold', fillColor: [246, 247, 249] } },
                 { content: sumaNeto.toLocaleString('es-AR') + ' KG', styles: { halign: 'right', fontStyle: 'bold', textColor: verde, fillColor: [246, 247, 249] } }
@@ -1012,7 +1357,7 @@ const ModuloStock = {
 
         const encabezados = [
             'REGISTRO ACOPIO', 'SILO N°', 'DEPÓSITO', 'ESTABLECIMIENTO', 'CAMPO', 'LOTE', 'CULTIVO',
-            'VARIEDAD', 'CAMPAÑA', 'KG ORIGINALES', 'KG EGRESADOS', 'STOCK NETO (KG)', 'DENSIDAD (KG/MTR)', 'MÉTRICA LINEAL (MTR)'
+            'VARIEDAD', 'CAMPAÑA', 'COORDENADAS GPS', 'KG ORIGINALES', 'KG EGRESADOS', 'STOCK NETO (KG)', 'DENSIDAD (KG/MTR)', 'MÉTRICA LINEAL (MTR)'
         ];
 
         const filas = datos.map(s => {
@@ -1027,6 +1372,7 @@ const ModuloStock = {
                 s.cultivo || '',
                 s.variedad || '',
                 s.campaña || '',
+                s.ubicacion || '',
                 Number(s.kg_originales || 0),
                 Number(egresado || 0),
                 Number(s.kg_disponibles_reales || 0),
@@ -1038,21 +1384,21 @@ const ModuloStock = {
         const sumaOriginal = datos.reduce((a, s) => a + s.kg_originales, 0);
         const sumaEgresado = datos.reduce((a, s) => a + (s.kg_originales - s.kg_disponibles_reales), 0);
         const sumaNeto = datos.reduce((a, s) => a + s.kg_disponibles_reales, 0);
-        const filaTotales = ['', '', '', '', '', '', '', '', 'TOTALES →', sumaOriginal, sumaEgresado, sumaNeto, '', ''];
+        const filaTotales = ['', '', '', '', '', '', '', '', '', 'TOTALES →', sumaOriginal, sumaEgresado, sumaNeto, '', ''];
 
         const aoa = [encabezados, ...filas, filaTotales];
         const ws = XLSX.utils.aoa_to_sheet(aoa);
 
         ws['!cols'] = [
             { wch: 14 }, { wch: 10 }, { wch: 18 }, { wch: 20 }, { wch: 14 }, { wch: 10 }, { wch: 16 },
-            { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 16 }
+            { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 16 }
         ];
-        ws['!autofilter'] = { ref: `A1:N${filas.length + 1}` };
+        ws['!autofilter'] = { ref: `A1:O${filas.length + 1}` };
         ws['!views'] = [{ state: 'frozen', ySplit: 1 }];
 
         const numFmt = '#,##0.00';
         for (let r = 2; r <= filas.length + 2; r++) {
-            ['J', 'K', 'L', 'M', 'N'].forEach(col => {
+            ['K', 'L', 'M', 'N', 'O'].forEach(col => {
                 const celda = ws[`${col}${r}`];
                 if (celda && typeof celda.v === 'number') celda.z = numFmt;
             });

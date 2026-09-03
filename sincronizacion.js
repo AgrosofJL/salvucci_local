@@ -37,6 +37,81 @@ const TABLAS_CONFIG = [
     { nombre: 'tipos_labores', pk: ['id_labor'] }
 ];
 
+/* ESTO LO MODIFIQUE / ACA ES LO NUEVO: Procesamiento de borrados respetando las PKs exactas */
+async function procesarEliminacionesPendientes(db) {
+    const clientSupabase = obtenerClienteSupabase();
+    if (!clientSupabase) return;
+
+    let pendientes = [];
+    if (typeof window !== 'undefined' && window.apiLocal && window.apiLocal.query) {
+        const res = await window.apiLocal.query({
+            sql: `SELECT * FROM eliminaciones_pendientes WHERE sincronizado = 0`
+        });
+        pendientes = res.data || [];
+    } else if (db && db.prepare) {
+        pendientes = db.prepare(`SELECT * FROM eliminaciones_pendientes WHERE sincronizado = 0`).all();
+    }
+
+    if (!pendientes || pendientes.length === 0) return;
+
+    console.log(`🗑️ Replicando ${pendientes.length} eliminaciones en Supabase...`);
+
+    for (const item of pendientes) {
+        try {
+            const config = TABLAS_CONFIG.find(t => t.nombre === item.tabla);
+            let req = clientSupabase.from(item.tabla).delete();
+
+            if (config) {
+                // Caso compuesto: (reg_local, id)
+                if (config.pk.includes('reg_local') && config.pk.includes('id')) {
+                    if (item.reg_local) req = req.eq('reg_local', item.reg_local);
+                    if (item.id_remoto) req = req.eq('id', item.id_remoto);
+                } 
+                // Caso PK: registro_aco
+                else if (config.pk.includes('registro_aco')) {
+                    req = req.eq('registro_aco', parseInt(item.clave_primaria_valor || item.id_remoto));
+                }
+                // Caso PK: id_labor
+                else if (config.pk.includes('id_labor')) {
+                    req = req.eq('id_labor', parseInt(item.clave_primaria_valor || item.id_remoto));
+                }
+                // Caso PK: reg_local
+                else if (config.pk.includes('reg_local')) {
+                    req = req.eq('reg_local', item.reg_local || item.clave_primaria_valor);
+                }
+                // Caso PK: id
+                else if (config.pk.includes('id')) {
+                    req = req.eq('id', parseInt(item.id_remoto || item.clave_primaria_valor));
+                }
+                // Caso PK: proveedor
+                else if (config.pk.includes('proveedor')) {
+                    req = req.eq('proveedor', item.clave_primaria_valor);
+                }
+            } else {
+                // Fallback estándar si no está en la lista de configuración
+                if (item.id_remoto) req = req.eq('id', item.id_remoto);
+                else if (item.reg_local) req = req.eq('reg_local', item.reg_local);
+            }
+
+            const { error } = await req;
+            if (!error) {
+                // Eliminado con éxito en Supabase -> limpiar cola local
+                if (typeof window !== 'undefined' && window.apiLocal && window.apiLocal.query) {
+                    await window.apiLocal.query({
+                        sql: `DELETE FROM eliminaciones_pendientes WHERE id_cola = ?`,
+                        params: [item.id_cola]
+                    });
+                } else if (db && db.prepare) {
+                    db.prepare(`DELETE FROM eliminaciones_pendientes WHERE id_cola = ?`).run(item.id_cola);
+                }
+            } else {
+                console.warn(`[Sync Delete] Error de Supabase al borrar en [${item.tabla}]:`, error.message);
+            }
+        } catch (err) {
+            console.warn(`[Sync Delete] Excepción al procesar borrado en [${item.tabla}]:`, err);
+        }
+    }
+}
 
 async function subirASupabase(db) {
     console.log("⬆️ Iniciando subida de registros locales no sincronizados...");
@@ -47,7 +122,7 @@ async function subirASupabase(db) {
     for (const config of TABLAS_CONFIG) {
         try {
             let pendientes = [];
-            if (window.apiLocal && window.apiLocal.query) {
+            if (typeof window !== 'undefined' && window.apiLocal && window.apiLocal.query) {
                 const res = await window.apiLocal.query({ sql: `SELECT * FROM ${config.nombre} WHERE sincronizado = 0` });
                 pendientes = res.data || [];
             } else if (db && db.prepare) {
@@ -62,7 +137,7 @@ async function subirASupabase(db) {
                 const datosASubir = { ...item };
                 delete datosASubir.sincronizado;
 
-                // Si 'id' es nulo/indefinido en la tabla local y no es parte excluyente de la PK, dejar que Supabase lo genere
+                // Si 'id' es nulo/indefinido en la tabla local y no es parte de la PK única, omitirlo para que Supabase lo genere
                 if (datosASubir.id === null || datosASubir.id === undefined || datosASubir.id === '') {
                     if (!config.pk.includes('id') || config.pk.length > 1) {
                         delete datosASubir.id;
@@ -79,7 +154,7 @@ async function subirASupabase(db) {
                     const whereClause = config.pk.map(k => `${k} = ?`).join(' AND ');
                     const pkValues = config.pk.map(k => item[k]);
 
-                    if (window.apiLocal && window.apiLocal.query) {
+                    if (typeof window !== 'undefined' && window.apiLocal && window.apiLocal.query) {
                         await window.apiLocal.query({ 
                             sql: `UPDATE ${config.nombre} SET sincronizado = 1 WHERE ${whereClause}`, 
                             params: pkValues 
@@ -134,7 +209,7 @@ async function bajarDeSupabase(db) {
                     ${setClause}
                 `;
 
-                if (window.apiLocal && window.apiLocal.query) {
+                if (typeof window !== 'undefined' && window.apiLocal && window.apiLocal.query) {
                     await window.apiLocal.query({ sql, params: valores });
                 } else if (db && db.prepare) {
                     db.prepare(sql).run(...valores);
@@ -151,6 +226,7 @@ async function bajarDeSupabase(db) {
     console.log(`✅ Descarga completada. Total bajados: ${totalBajados}`);
     return { success: true, bajados: totalBajados };
 }
+
 /**
  * Función Principal de Sincronización con Animación y Notificación
  */
@@ -158,7 +234,9 @@ async function sincronizarTodoCore(db) {
     console.log("🔄 --- INICIANDO SINCRONIZACIÓN GENERAL ---");
 
     // 1. Activar animación visual en todos los botones de sincronización
-    const botones = document.querySelectorAll('#sync-btn, .btn-sync-soft, [onclick*="sincronizar_todo"], [onclick*="sincronizarTodo"]');
+    const botones = typeof document !== 'undefined' 
+        ? document.querySelectorAll('#sync-btn, .btn-sync-soft, [onclick*="sincronizar_todo"], [onclick*="sincronizarTodo"]') 
+        : [];
     const estadosPrevios = [];
     
     botones.forEach(btn => {
@@ -167,20 +245,21 @@ async function sincronizarTodoCore(db) {
         btn.classList.add('sync-btn-animating');
         btn.innerHTML = `<i data-lucide="refresh-cw" class="sync-icon-rotating" style="width:14px; height:14px; margin-right:6px;"></i> Sincronizando...`;
     });
-    if (window.lucide) lucide.createIcons();
+    if (typeof window !== 'undefined' && window.lucide) lucide.createIcons();
 
     try {
-        // 2. Ejecutar Subida y Bajada
+        // 2. Ejecutar Eliminaciones con AWAIT obligatorio, luego Subida y Bajada
+        await procesarEliminacionesPendientes(db);
         await subirASupabase(db);
         await bajarDeSupabase(db);
 
         // 3. Si hay un módulo abierto, refrescar su vista
-        if (window.__ultimoModuloCargado && typeof window.m_cargarModulo === 'function') {
+        if (typeof window !== 'undefined' && window.__ultimoModuloCargado && typeof window.m_cargarModulo === 'function') {
             await window.m_cargarModulo(window.__ultimoModuloCargado);
         }
 
-        // 4. Mostrar Toast flotante verde de éxito
-        m_mostrarToastSincronizacion("¡Sincronización Exitosa! Datos actualizados con la Hosting de Agrosoft J&L.", "exito");
+        // 4. Mostrar Toast flotante de éxito
+        m_mostrarToastSincronizacion("¡Sincronización Exitosa! Datos actualizados con Supabase.", "exito");
         console.log("🏁 --- SINCRONIZACIÓN FINALIZADA CON ÉXITO ---");
 
     } catch (error) {
@@ -195,7 +274,7 @@ async function sincronizarTodoCore(db) {
                 btn.innerHTML = estadosPrevios[idx].html;
             }
         });
-        if (window.lucide) lucide.createIcons();
+        if (typeof window !== 'undefined' && window.lucide) lucide.createIcons();
     }
 }
 
@@ -203,6 +282,8 @@ async function sincronizarTodoCore(db) {
  * Toast Flotante Dinámico (Verde para éxito, Rojo para error)
  */
 function m_mostrarToastSincronizacion(mensaje, tipo = 'exito') {
+    if (typeof document === 'undefined') return;
+
     const toastPrevio = document.getElementById('toast-sync-notification');
     if (toastPrevio) toastPrevio.remove();
 
@@ -236,6 +317,7 @@ function m_mostrarToastSincronizacion(mensaje, tipo = 'exito') {
 
 // Inyección de estilos de animación
 (function inyectarEstilosAnimacionSync() {
+    if (typeof document === 'undefined') return;
     if (document.getElementById('estilos-sync-animacion')) return;
     const style = document.createElement('style');
     style.id = 'estilos-sync-animacion';
@@ -257,6 +339,7 @@ function m_mostrarToastSincronizacion(mensaje, tipo = 'exito') {
 const objetoSincronizacion = {
     subirASupabase,
     bajarDeSupabase,
+    procesarEliminacionesPendientes,
     sincronizarTodo: sincronizarTodoCore,
     sincronizar_todo: sincronizarTodoCore,
     m_mostrarToastSincronizacion

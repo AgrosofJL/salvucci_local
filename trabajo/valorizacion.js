@@ -213,18 +213,11 @@ const LabValorizacion = {
                         <span class="badge-activo" style="background: rgba(31,169,88,0.1); color: #1FA958; padding: 3px 8px; border-radius: 12px; font-size: 0.65rem; font-weight: 700; border: 1px solid rgba(31,169,88,0.2);">EGRESOS_INSUMOS (base LOCAL)</span>
                     </div>
                     <div style="display: flex; gap: 8px; align-items: center;">
-                        <button onclick="LabValorizacion.m_inicializar()" style="background: #F0F2F5; color: #1D1D1F; border: 1px solid #E4E7EC; padding: 7px 12px; border-radius: 8px; font-size: 0.75rem; font-weight: 700; cursor: pointer; font-family:'Roboto';">
-                            ↻ Actualizar
-                        </button>
                         <button onclick="LabValorizacion.m_exportarReporte('EXCEL')" style="background: #1FA958; color: #FFFFFF; border: none; padding: 7px 14px; border-radius: 8px; font-size: 0.75rem; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(31,169,88,0.2); font-family:'Roboto';">
                             🗂️ Exportar Excel
                         </button>
                         <button onclick="LabValorizacion.m_exportarReporte('PDF')" style="background: #E0342A; color: #FFFFFF; border: none; padding: 7px 14px; border-radius: 8px; font-size: 0.75rem; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(224,52,42,0.2); font-family:'Roboto';">
                             📊 Reporte Gráfico PDF
-                        </button>
-                        <!-- ACA ES LO NUEVO: Botón de Sincronización Global -->
-                        <button onclick="window.sincronizar_todo && window.sincronizar_todo()" style="background: #0071E3; color: #FFFFFF; border: none; padding: 7px 14px; border-radius: 8px; font-size: 0.75rem; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(0,113,227,0.25); font-family:'Roboto';" title="Sincronizar todo con la base central">
-                            ⚡ SINCRONIZAR ALL
                         </button>
                     </div>
                 </div>

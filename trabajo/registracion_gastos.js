@@ -242,10 +242,6 @@ const ModuloGastosAdm = {
                         <button class="btn-sync-soft" onclick="ModuloGastosAdm.m_abrirFormulario()" style="background:#0071E3; color:#FFF; border:none; padding:8px 18px; border-radius:8px; font-weight:bold; cursor:pointer; display:flex; align-items:center; gap:6px; box-shadow: 0 4px 12px rgba(0,113,227,0.25);">
                             <i data-lucide="plus-circle" style="width:14px; height:14px;"></i> NUEVO GASTO
                         </button>
-                        <!-- ACA ES LO NUEVO: Botón de Sincronización Global -->
-                        <button onclick="window.sincronizar_todo && window.sincronizar_todo()" style="background: #0071E3; color: #FFFFFF; border: none; padding: 8px 14px; border-radius: 8px; font-size: 0.78rem; font-weight: 700; cursor: pointer; display:flex; align-items:center; gap:6px; box-shadow: 0 4px 12px rgba(0,113,227,0.25); font-family:'Roboto';" title="Sincronizar todo con la base central">
-                            ⚡ SINCRONIZAR ALL
-                        </button>
                     </div>
                 </div>
 

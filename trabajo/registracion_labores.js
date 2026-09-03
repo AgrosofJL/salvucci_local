@@ -229,11 +229,6 @@ const ModuloLabores = {
                             📊 PDF Reporte
                         </button>
                         
-                        <!-- ACA ES LO NUEVO: Botón de Sincronización Global -->
-                        <button onclick="window.sincronizar_todo && window.sincronizar_todo()" style="background:#1FA958; color:#FFFFFF; border:none; padding:8px 14px; border-radius:8px; font-weight:700; cursor:pointer; box-shadow:0 4px 12px rgba(31,169,88,0.25); display:flex; align-items:center; gap:6px; font-family:'Roboto'; font-size:0.78rem;" title="Sincronizar todo con la base central">
-                            ⚡ SINCRONIZAR ALL
-                        </button>
-
                         <button onclick="ModuloLabores.m_abrirFormulario()" style="background:#0071E3; color:#FFFFFF; border:none; padding:8px 16px; border-radius:8px; font-weight:700; cursor:pointer; box-shadow:0 4px 12px rgba(0,113,227,0.25); display:flex; align-items:center; gap:6px; font-family:'Roboto'; font-size:0.78rem;">
                             ⚙️ REGISTRAR LABOR
                         </button>
@@ -509,11 +504,12 @@ const ModuloLabores = {
         
         if (tituloComponente) {
             tituloComponente.innerText = 'REGISTRO DE LABOR OPERATIVA EN LOTE';
-            tituloComponente.style.color = '#0071E3';
+            tituloComponente.style.color = '#123F2C';
         }
         
         const modalContent = document.querySelector('.modal-apple-content');
-        if (modalContent) modalContent.style.maxWidth = '850px';
+        // Ancho optimizado para evitar espacios vacíos innecesarios
+        if (modalContent) modalContent.style.maxWidth = '680px';
 
         if (footerAcciones) {
             footerAcciones.style.display = 'none';
@@ -523,81 +519,97 @@ const ModuloLabores = {
 
         if (container) {
             container.innerHTML = `
-                <div class="form-container-apple animated fadeIn" style="padding:2px;">
+                <div class="form-container-apple animated fadeIn" style="padding:2px; font-family:'Roboto', sans-serif;">
                     <style>
-                        .grid-labores { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-family:'Roboto', sans-serif; }
-                        .full-row { grid-column: span 2; }
-                        .display-calculo {
-                            background: rgba(31, 169, 88, 0.08); border: 1px solid rgba(31, 169, 88, 0.25);
-                            border-radius: 12px; padding: 12px; text-align: center; margin-top: 5px;
+                        .grid-labores-compacta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+                        .full-row-lab { grid-column: span 2; }
+                        .display-calculo-lab {
+                            background: rgba(30, 107, 76, 0.08); border: 1px solid rgba(30, 107, 76, 0.25);
+                            border-radius: 10px; padding: 10px; text-align: center;
                         }
-                        .group-soft label { font-size:0.63rem; color:#6E6E73; display:block; margin-bottom:4px; text-transform:uppercase; font-weight:700; }
+                        .group-soft-lab label {
+                            font-size: 0.65rem; color: #6B6255; display: block; margin-bottom: 4px;
+                            text-transform: uppercase; font-weight: 700; letter-spacing: 0.3px;
+                        }
+                        .input-filtro-lab {
+                            width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid #E0DCD4;
+                            font-size: 0.82rem; background: #FFFFFF; color: #1D1D1F; outline: none;
+                            box-sizing: border-box; font-family: 'Roboto', sans-serif;
+                            transition: border-color 0.2s ease;
+                        }
+                        .input-filtro-lab:focus { border-color: #1E6B4C; }
                     </style>
 
-                    <div class="grid-labores">
-                        <div class="group-soft">
-                            <label>📍 ESTABLECIMIENTO</label>
-                            <select id="l_est" onchange="ModuloLabores.m_cargarCampos(this.value)" class="input-filtro-ot">
-                                <option value="">Seleccione...</option>
-                                ${estUnicos.map(e => `<option value="${e}">${e}</option>`).join('')}
-                            </select>
-                        </div>
-
-                        <div class="group-soft">
-                            <label>🧭 CAMPO / SECTOR</label>
-                            <select id="l_campo" onchange="ModuloLabores.m_cargarLotes(this.value)" class="input-filtro-ot">
-                                <option value="">Esperando establecimiento...</option>
-                            </select>
-                        </div>
-
-                        <div class="group-soft">
-                            <label>🌾 LOTE / CUADRO INDEXADO</label>
-                            <select id="l_lote" onchange="ModuloLabores.m_autoRellenarSuperficie(this)" class="input-filtro-ot">
-                                <option value="">Esperando campo...</option>
-                            </select>
-                        </div>
-
-                        <div class="group-soft">
-                            <label>📅 FECHA EJECUCIÓN</label>
-                            <input type="date" id="l_fecha" value="${new Date().toISOString().split('T')[0]}" class="input-filtro-ot">
-                        </div>
-
-                        <div class="group-soft full-row">
-                            <label>TIPO DE LABOR OPERATIVA</label>
-                            <div style="display:flex; gap:8px;">
-                                <select id="l_tipo_labor" style="flex:1;" class="input-filtro-ot">
-                                    <option value="">Seleccione labor...</option>
-                                    ${this.parametros.labores.map(lab => `<option value="${lab.labor}">${lab.labor}</option>`).join('')}
+                    <div style="background:#F8FAFC; border:1px solid #E0DCD4; padding:14px; border-radius:12px; margin-bottom:10px;">
+                        <div class="grid-labores-compacta">
+                            <div class="group-soft-lab">
+                                <label>📍 Establecimiento</label>
+                                <select id="l_est" onchange="ModuloLabores.m_cargarCampos(this.value)" class="input-filtro-lab">
+                                    <option value="">Seleccione...</option>
+                                    ${estUnicos.map(e => `<option value="${e}">${e}</option>`).join('')}
                                 </select>
-                                <button class="btn-mini-soft" onclick="ModuloLabores.m_nuevoTipoLabor()" style="background:#0071E3; border:none; border-radius:8px; padding:0 12px; cursor:pointer; color:white; font-weight:bold;" title="Añadir tipo de labor">+</button>
                             </div>
-                        </div>
 
-                        <div class="group-soft">
-                            <label>CANTIDAD TRABAJADA (Ha / Kg)</label>
-                            <input type="number" step="0.01" id="l_cant" placeholder="0.00" oninput="ModuloLabores.m_calcular()" class="input-filtro-ot">
-                        </div>
+                            <div class="group-soft-lab">
+                                <label>🧭 Campo / Sector</label>
+                                <select id="l_campo" onchange="ModuloLabores.m_cargarLotes(this.value)" class="input-filtro-lab">
+                                    <option value="">Esperando establecimiento...</option>
+                                </select>
+                            </div>
 
-                        <div class="group-soft">
-                            <label>PRECIO UNITARIO TARIFA (U$S)</label>
-                            <input type="number" step="0.01" id="l_precio" placeholder="0.00" oninput="ModuloLabores.m_calcular()" class="input-filtro-ot">
-                        </div>
+                            <div class="group-soft-lab">
+                                <label>🌾 Lote / Cuadro Indexado</label>
+                                <select id="l_lote" onchange="ModuloLabores.m_autoRellenarSuperficie(this)" class="input-filtro-lab">
+                                    <option value="">Esperando campo...</option>
+                                </select>
+                            </div>
 
-                        <div class="full-row display-calculo">
-                            <small style="color: #1FA958; text-transform: uppercase; font-size:0.6rem; font-weight:800; letter-spacing: 0.5px;">VALORIZACIÓN TOTAL LIQUIDADA</small>
-                            <h2 id="l_total_display" style="color: #1FA958; margin: 2px 0; font-size:1.3rem; font-weight:900;">U$S 0.00</h2>
-                            <input type="hidden" id="l_total_val" value="0">
-                        </div>
-
-                        <div class="group-soft full-row">
-                            <label>OBSERVACIONES / TRAZABILIDAD DE LA LABOR</label>
-                            <textarea id="l_obs" rows="2" placeholder="Ej: Variedad cosechada, condiciones climáticas óptimas..." class="input-filtro-ot" style="font-family:'Roboto';"></textarea>
+                            <div class="group-soft-lab">
+                                <label>📅 Fecha Ejecución</label>
+                                <input type="date" id="l_fecha" value="${new Date().toISOString().split('T')[0]}" class="input-filtro-lab">
+                            </div>
                         </div>
                     </div>
 
-                    <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; border-top: 1px solid rgba(0,113,227,0.15); padding-top: 12px;">
-                        <button class="btn-cancel-soft" id="btn-cancelar-operacion-local" style="background: #F0F2F5; color: #1D1D1F; border: none; padding: 8px 18px; font-weight: 700; border-radius: 8px; font-size: 0.78rem; cursor: pointer; font-family:'Roboto';">CANCELAR</button>
-                        <button class="btn-save-soft" id="btn-guardar-operacion-local" style="background: #0071E3; color: #FFFFFF; border: none; padding: 8px 22px; font-weight: 700; border-radius: 8px; font-size: 0.78rem; cursor: pointer; font-family:'Roboto'; box-shadow:0 4px 12px rgba(0,113,227,0.2);">GUARDAR OPERACIÓN</button>
+                    <div style="background:#F8FAFC; border:1px solid #E0DCD4; padding:14px; border-radius:12px; margin-bottom:10px;">
+                        <div class="grid-labores-compacta">
+                            <div class="group-soft-lab full-row-lab">
+                                <label>Tipo de Labor Operativa</label>
+                                <div style="display:flex; gap:6px;">
+                                    <select id="l_tipo_labor" style="flex:1;" class="input-filtro-lab">
+                                        <option value="">Seleccione labor...</option>
+                                        ${this.parametros.labores.map(lab => `<option value="${lab.labor}">${lab.labor}</option>`).join('')}
+                                    </select>
+                                    <button type="button" onclick="ModuloLabores.m_nuevoTipoLabor()" style="background:#1E6B4C; color:white; border:none; width:34px; height:34px; border-radius:8px; font-weight:900; font-size:1.1rem; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0;" title="Añadir nuevo tipo de labor">+</button>
+                                </div>
+                            </div>
+
+                            <div class="group-soft-lab">
+                                <label>Superficie / Cantidad (Ha / Kg)</label>
+                                <input type="number" step="0.01" id="l_cant" placeholder="0.00" oninput="ModuloLabores.m_calcular()" class="input-filtro-lab" style="font-weight:700; color:#123F2C;">
+                            </div>
+
+                            <div class="group-soft-lab">
+                                <label>Precio Unitario Tarifa (U$S)</label>
+                                <input type="number" step="0.01" id="l_precio" placeholder="0.00" oninput="ModuloLabores.m_calcular()" class="input-filtro-lab">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="display-calculo-lab" style="margin-bottom:10px;">
+                        <small style="color:#1E6B4C; text-transform:uppercase; font-size:0.62rem; font-weight:800; letter-spacing:0.5px; display:block; margin-bottom:2px;">Valorización Total Liquidada</small>
+                        <h2 id="l_total_display" style="color:#1E6B4C; margin:0; font-size:1.35rem; font-weight:900; font-family:monospace;">U$S 0.00</h2>
+                        <input type="hidden" id="l_total_val" value="0">
+                    </div>
+
+                    <div class="group-soft-lab full-row-lab">
+                        <label>Observaciones / Trazabilidad de la Labor</label>
+                        <textarea id="l_obs" rows="2" placeholder="Ej: Condiciones climáticas, pulverización con boquillas antideriva..." class="input-filtro-lab" style="resize:vertical;"></textarea>
+                    </div>
+
+                    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:14px; border-top:1px solid #E0DCD4; padding-top:12px;">
+                        <button type="button" id="btn-cancelar-operacion-local" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:8px 18px; font-weight:700; border-radius:8px; font-size:0.78rem; cursor:pointer;">CANCELAR</button>
+                        <button type="button" id="btn-guardar-operacion-local" style="background:#1E6B4C; color:#FFFFFF; border:none; padding:8px 22px; font-weight:700; border-radius:8px; font-size:0.78rem; cursor:pointer; box-shadow:0 4px 12px rgba(30,107,76,0.25);">GUARDAR OPERACIÓN</button>
                     </div>
                 </div>
             `;
@@ -693,36 +705,39 @@ const ModuloLabores = {
 
         container.innerHTML = `
             <div class="form-container-apple animated fadeIn" style="padding:4px; font-family:'Roboto', sans-serif;">
-                <div style="background: rgba(0, 113, 227, 0.06); border-left: 4px solid #0071E3; padding: 12px; margin-bottom: 16px; border-radius: 8px;">
-                    <strong style="color: #1D1D1F; font-size:0.85rem;">NUEVA CATEGORÍA OPERATIVA (base LOCAL)</strong>
-                    <p style="font-size: 0.75rem; opacity: 0.85; margin: 3px 0 0 0; color:#6E6E73;">Configure el rubro macro y el nombre específico de la labor.</p>
+                <div style="background:rgba(30,107,76,0.08); border-left:4px solid #1E6B4C; padding:12px 14px; margin-bottom:14px; border-radius:8px;">
+                    <strong style="color:#123F2C; font-size:0.85rem;">NUEVA CATEGORÍA OPERATIVA (BASE LOCAL)</strong>
+                    <p style="font-size:0.72rem; margin:3px 0 0 0; color:#6B6255;">El registro se guardará directamente en la tabla maestra <b>tipos_labores</b>.</p>
                 </div>
                 
-                <div class="grid-labores">
-                    <div class="group-soft full-row">
-                        <label style="font-size:0.63rem; color:#6E6E73; font-weight:700;">RUBRO GENERAL (GRUPO COSECHA/SIEMBRA)</label>
-                        <input type="text" id="input_nuevo_rubro" list="lista-rubros" placeholder="Ej: SIEMBRA o COSECHA" class="input-filtro-ot" style="text-transform: uppercase; padding:8px;">
-                        <datalist id="lista-rubros">
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                    <div>
+                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Rubro General (Grupo Cosecha / Siembra / Pulverización)</label>
+                        <input type="text" id="input_nuevo_rubro" list="lista-rubros-lab" placeholder="Ej: PULVERIZACIÓN" class="input-filtro-lab" style="text-transform:uppercase;">
+                        <datalist id="lista-rubros-lab">
                             ${rubrosExistentes.map(r => `<option value="${r}"></option>`).join('')}
                         </datalist>
                     </div>
 
-                    <div class="group-soft full-row" style="margin-top:8px;">
-                        <label style="font-size:0.63rem; color:#6E6E73; font-weight:700;">NOMBRE ESPECÍFICO DE LA LABOR</label>
-                        <input type="text" id="input_nueva_labor" placeholder="Ej: SIEMBRA DE MAIZ TARDIO" class="input-filtro-ot" style="text-transform: uppercase; padding:8px;">
+                    <div>
+                        <label style="font-size:0.65rem; color:#123F2C; font-weight:800; text-transform:uppercase; display:block; margin-bottom:4px;">Nombre Específico de la Labor</label>
+                        <input type="text" id="input_nueva_labor" placeholder="Ej: APLICACIÓN HERBICIDA TOTAL" class="input-filtro-lab" style="text-transform:uppercase; border:1.5px solid #1E6B4C; font-weight:bold;">
                     </div>
                 </div>
 
-                <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px; border-top:1px solid #E4E7EC; padding-top:12px;">
-                    <button type="button" id="btn_cancelar_alta_lab" class="btn-cancel-soft" style="background:#F0F2F5; color:#1D1D1F; border:none; padding:8px 16px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer;">VOLVER</button>
-                    <button type="button" id="btn_confirmar_alta_lab" class="btn-save-soft" style="background:#1FA958; color:#FFFFFF; border:none; padding:8px 18px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer; box-shadow:0 4px 12px rgba(31,169,88,0.2);">CONFIRMAR ALTA</button>
+                <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px; border-top:1px solid #E0DCD4; padding-top:12px;">
+                    <button type="button" id="btn_cancelar_alta_lab" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:8px 16px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer;">VOLVER</button>
+                    <button type="button" id="btn_confirmar_alta_lab" style="background:#1E6B4C; color:#FFFFFF; border:none; padding:8px 18px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer; box-shadow:0 4px 12px rgba(30,107,76,0.25);">CONFIRMAR ALTA</button>
                 </div>
             </div>
         `;
 
         document.getElementById('btn_cancelar_alta_lab').onclick = () => {
             container.innerHTML = formOriginal;
-            this.m_restaurarBotoneraPrincipal();
+            const btnCancelLocal = document.getElementById('btn-cancelar-operacion-local');
+            const btnSaveLocal = document.getElementById('btn-guardar-operacion-local');
+            if (btnCancelLocal) btnCancelLocal.onclick = () => document.getElementById('modal-agrosoft').style.display = 'none';
+            if (btnSaveLocal) btnSaveLocal.onclick = () => ModuloLabores.m_guardar();
         };
 
         document.getElementById('btn_confirmar_alta_lab').onclick = async () => {
@@ -730,41 +745,49 @@ const ModuloLabores = {
             const labor = document.getElementById('input_nueva_labor').value.trim().toUpperCase();
 
             if (!rubro || !labor) {
-                return this.m_mostrarNotificacion("Ambos campos son obligatorios.", "error");
+                return alert("⚠️ Ambos campos (Rubro y Labor) son obligatorios.");
             }
 
             try {
-                // Regla Max(registro)+1 para id_labor en SQLite
-                const resMax = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(id_labor AS INTEGER)) as max_val FROM tipos_labores`);
+                // Regla Max(id_labor) + 1 para tipos_labores en SQLite
+                const resMax = await ModuloLabores.m_ejecutarSqlLocal(`SELECT MAX(CAST(id_labor AS INTEGER)) as max_val FROM tipos_labores`);
                 const maxVal = (resMax.data && resMax.data[0] && resMax.data[0].max_val) 
                     ? Number(resMax.data[0].max_val) 
                     : (resMax[0] && resMax[0].max_val ? Number(resMax[0].max_val) : 0);
                 
                 const nuevoIdLabor = maxVal + 1;
 
-                await this.m_ejecutarSqlLocal(
+                await ModuloLabores.m_ejecutarSqlLocal(
                     `INSERT INTO tipos_labores (id_labor, rubro, labor, sincronizado) VALUES (?, ?, ?, 0)`,
                     [nuevoIdLabor, rubro, labor]
                 );
 
-                this.parametros.labores.push({ id_labor: nuevoIdLabor, rubro: rubro, labor: labor });
+                ModuloLabores.parametros.labores.push({ id_labor: nuevoIdLabor, rubro: rubro, labor: labor });
+                
+                // Restaurar vista previa y reenganchar eventos
                 container.innerHTML = formOriginal;
-                this.m_restaurarBotoneraPrincipal();
+                const btnCancelLocal = document.getElementById('btn-cancelar-operacion-local');
+                const btnSaveLocal = document.getElementById('btn-guardar-operacion-local');
+                if (btnCancelLocal) btnCancelLocal.onclick = () => document.getElementById('modal-agrosoft').style.display = 'none';
+                if (btnSaveLocal) btnSaveLocal.onclick = () => ModuloLabores.m_guardar();
                 
                 const select = document.getElementById('l_tipo_labor');
                 if (select) {
                     const opt = new Option(labor, labor, true, true);
                     select.add(opt);
                 }
-                this.m_mostrarNotificacion("Nueva nomenclatura de labor indexada localmente.", "exito");
+
+                if (window.ComponentesUI && window.ComponentesUI.notificar) {
+                    window.ComponentesUI.notificar("✅ Nueva labor guardada en catálogo local.");
+                }
             } catch (err) {
                 console.error("❌ Error al guardar tipo_labor local:", err);
-                this.m_mostrarNotificacion("Error de resguardo en tipos_labores local: " + err.message, "error");
+                alert("Error al registrar en tipos_labores local: " + err.message);
             }
         };
 
-        const inputRubro = document.getElementById('input_nuevo_rubro');
-        if (inputRubro) inputRubro.focus();
+        const inputLabor = document.getElementById('input_nueva_labor');
+        if (inputLabor) inputLabor.focus();
     },
 
     m_restaurarBotoneraPrincipal: function() {
