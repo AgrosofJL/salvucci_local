@@ -94,6 +94,7 @@ const LabValorizacion = {
             cuadro: r.cuadro || '',
             centro_costo: r.centro_costo || '',
             concepto: r.insumo || r.labor || this.m_metaCategoria(origen).label,
+            cod_articulo: r.cod_articulo || '', // <-- ACA ES LO NUEVO
             cantidad: Number(r.total_consumo) || 0,
             superficie: Number(r.sup_uso) || 0,
             costo_total_usd: Number(r.total_dolar) || 0,

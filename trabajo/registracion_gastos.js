@@ -644,13 +644,17 @@ const ModuloGastosAdm = {
         const resMax = await this.m_ejecutarSqlLocal(`
             SELECT 
                 MAX(CAST(reg_local AS INTEGER)) AS max_reg,
-                MAX(CAST(orden_trab AS INTEGER)) AS max_ot
+                MAX(CAST(orden_trab AS INTEGER)) AS max_ot,
+                MAX(CAST(id AS INTEGER)) AS max_id
             FROM egresos_insumos
         `);
 
         const row = (resMax.data && resMax.data[0]) || (resMax[0]) || {};
         const maxVal = parseInt(row.max_reg, 10) || 0;
         const maxOt = parseInt(row.max_ot, 10) || 0;
+        const maxId = parseInt(row.max_id, 10) || 0;
+
+        let nuevoIdGasto = maxId + 1;
 
         if (!isEdit) {
             finalRegLocal = "REG-GAS-AD-" + Date.now();
@@ -713,10 +717,10 @@ const ModuloGastosAdm = {
                 costoFinal, finalRegLocal
             ]);
         } else {
-            // OMITIMOS 'id' en la columna y en los VALUES para que SQLite use AUTOINCREMENT
             const sqlInsert = `
                 INSERT INTO egresos_insumos (
                     reg_local, 
+                    id,
                     tabla_origen, 
                     tipo_labor, 
                     fecha, 
@@ -738,12 +742,14 @@ const ModuloGastosAdm = {
                     estado, 
                     orden_trab, 
                     ref_orden, 
+                    cod_articulo,
                     sincronizado
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
             `;
 
             await this.m_ejecutarSqlLocal(sqlInsert, [
                 finalRegLocal,
+                nuevoIdGasto,
                 'GASTO_ADM',
                 'OTROS GASTOS ADM',
                 fechaVal,

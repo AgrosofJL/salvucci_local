@@ -8,6 +8,7 @@ const ModuloOrdenes = {
         campos: [],
         cuadros: [],
         insumos: [],
+        insumosMaestros: [],
         labores: [],
         ordenes: []
     },
@@ -17,9 +18,8 @@ const ModuloOrdenes = {
     rawEgresos: [],
     _chartEstado: null,
     _chartInversion: null,
-    tablaTabEstado: 'ACTIVAS',
+    vistaTabSuperior: 'ACTIVAS', // 'ACTIVAS' | 'TERMINADAS' | 'ESTADISTICAS'
 
-    // Helper IPC para ejecutar SQL en la base SQLite local
     m_ejecutarSqlLocal: async function(sql, params = []) {
         if (window.apiLocal && window.apiLocal.query) {
             return await window.apiLocal.query({ sql, params });
@@ -27,7 +27,7 @@ const ModuloOrdenes = {
         if (window.electronAPI && window.electronAPI.invoke) {
             return await window.electronAPI.invoke('local-db-query', { sql, params });
         }
-        throw new Error("No se encontró el puente IPC con la base de datos base local.");
+        throw new Error("No se encontró el puente IPC con la base de datos local.");
     },
 
     m_asegurarModalBase: function() {
@@ -45,7 +45,6 @@ const ModuloOrdenes = {
                     </div>
                 </div>`;
             document.body.insertAdjacentHTML('beforeend', modalHTML);
-            modal = document.getElementById('modal-agrosoft');
         }
     },
 
@@ -59,7 +58,7 @@ const ModuloOrdenes = {
             const [resCam, resCua, resIns, resLab, resOrd, resIng] = await Promise.all([
                 this.m_ejecutarSqlLocal(`SELECT * FROM campos ORDER BY establecimiento ASC`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM cuadros ORDER BY lote ASC`),
-                this.m_ejecutarSqlLocal(`SELECT * FROM insumos ORDER BY articulo ASC`),
+                this.m_ejecutarSqlLocal(`SELECT reg_local, articulo, rubro, sub_rubro, descripcion, unidad_medida FROM insumos ORDER BY articulo ASC`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM tipos_labores ORDER BY labor ASC`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM egresos_insumos ORDER BY id DESC`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM insumos_ingresos`)
@@ -68,7 +67,7 @@ const ModuloOrdenes = {
             this.parametros.campos = resCam.data || resCam || [];
             this.parametros.cuadros = resCua.data || resCua || [];
             this.parametros.labores = resLab.data || resLab || [];
-            
+            this.parametros.insumosMaestros = resIns.data || resIns || []; // Maestro permanente con reg_local
             this.rawIngresos = resIng.data || resIng || [];
             this.rawEgresos = resOrd.data || resOrd || []; 
 
@@ -87,17 +86,29 @@ const ModuloOrdenes = {
         const consolidado = {};
         const depoKey = (depositoId || "DEB_CENTRAL").trim().toUpperCase();
 
+        const mapaMaestro = new Map();
+        (this.parametros.insumosMaestros || []).forEach(m => {
+            if (m.reg_local) mapaMaestro.set(String(m.reg_local).trim(), m);
+            if (m.articulo) mapaMaestro.set(m.articulo.trim().toUpperCase(), m);
+        });
+
         this.rawIngresos.forEach(i => {
             if ((i.campo_depo || "").trim().toUpperCase() !== depoKey) return;
-            const artKey = (i.articulo || "SIN ARTICULO").trim().toUpperCase();
+            const codDirecto = (i.cod_articulo || '').trim();
+            const artNombre = (i.articulo || "SIN ARTICULO").trim().toUpperCase();
+            const maestro = (codDirecto && mapaMaestro.get(codDirecto)) || mapaMaestro.get(artNombre);
+            const artKey = maestro?.reg_local || codDirecto || artNombre;
+
             if (!consolidado[artKey]) {
                 consolidado[artKey] = { 
-                    articulo: i.articulo, 
-                    descripcion: (i.descripcion || "GENERAL").trim().toUpperCase(), 
+                    cod_articulo: maestro?.reg_local || codDirecto || null,
+                    reg_local: maestro?.reg_local || codDirecto || null,
+                    articulo: maestro?.articulo || i.articulo, 
+                    descripcion: (maestro?.descripcion || i.descripcion || "GENERAL").trim().toUpperCase(), 
                     tipo_insumos: (i.tipo_insumo || "GENERAL").trim().toUpperCase(), 
                     entradas: 0, 
                     salidas: 0, 
-                    unidad: i.unidad || 'u' 
+                    unidad: maestro?.unidad_medida || i.unidad || 'u' 
                 };
             }
             consolidado[artKey].entradas += Number(i.total || i.cant) || 0;
@@ -106,15 +117,22 @@ const ModuloOrdenes = {
         this.rawEgresos.forEach(e => {
             if ((e.estado || 'ACTIVO').toUpperCase() === 'CANCELADO') return; 
             if ((e.deposito_origen || "").trim().toUpperCase() !== depoKey) return;
-            const artKey = (e.insumo || "SIN ARTICULO").trim().toUpperCase();
+            
+            const codDirecto = (e.cod_articulo || '').trim();
+            const artNombre = (e.insumo || "SIN ARTICULO").trim().toUpperCase();
+            const maestro = (codDirecto && mapaMaestro.get(codDirecto)) || mapaMaestro.get(artNombre);
+            const artKey = maestro?.reg_local || codDirecto || artNombre;
+
             if (!consolidado[artKey]) {
                 consolidado[artKey] = { 
-                    articulo: e.insumo, 
-                    descripcion: (e.comentario || "GENERAL").trim().toUpperCase(), 
+                    cod_articulo: maestro?.reg_local || codDirecto || null,
+                    reg_local: maestro?.reg_local || codDirecto || null,
+                    articulo: maestro?.articulo || e.insumo, 
+                    descripcion: (maestro?.descripcion || e.comentario || "GENERAL").trim().toUpperCase(), 
                     tipo_insumos: (e.tipo_labor || "GENERAL").trim().toUpperCase(), 
                     entradas: 0, 
                     salidas: 0, 
-                    unidad: 'u' 
+                    unidad: maestro?.unidad_medida || 'u' 
                 };
             }
             consolidado[artKey].salidas += Number(e.total_consumo) || 0;
@@ -142,7 +160,7 @@ const ModuloOrdenes = {
             const insumosDisponibles = this.parametros.insumos.filter(i => (i.stock_actual || 0) > 0);
 
             selectInsumo.innerHTML = `<option value="">Insumo...</option>` + insumosDisponibles.map(i => {
-                return `<option value="${i.articulo}" data-stock="${i.stock_actual}" data-unidad="${i.unidad}">📦 ${i.articulo.toUpperCase()} (${i.stock_actual} ${i.unidad})</option>`;
+                return `<option value="${i.articulo}" data-cod="${i.cod_articulo || i.reg_local || ''}" data-stock="${i.stock_actual}" data-unidad="${i.unidad}">📦 ${i.articulo.toUpperCase()} (${i.stock_actual} ${i.unidad})</option>`;
             }).join('');
 
             this.m_actualizarStockLabel(selectInsumo);
@@ -237,30 +255,35 @@ const ModuloOrdenes = {
                     --color-plant: #1E6B4C;
                     --color-plant-dark: #123F2C;
                     --color-plant-soft: rgba(30, 107, 76, 0.10);
+                    --radius-lg: 16px;
+                    --radius-md: 12px;
                 }
 
                 .ordenes-master-container {
                     font-family: 'Roboto', sans-serif;
                     padding: 8px 18px 25px 18px;
-                    color: #1D1D1F;
+                    color: var(--color-text);
                     width: 100% !important;
                     box-sizing: border-box;
-                    max-height: calc(100vh - 65px);
-                    overflow-y: auto;
+                    height: calc(100vh - 65px);
+                    display: flex;
+                    flex-direction: column;
+                    overflow: hidden;
+                    gap: 8px;
                 }
 
                 .tabs-header-archivero-main {
-                    display: flex; gap: 8px; border-bottom: 2px solid #E0DCD4; margin-bottom: 12px; align-items: flex-end;
+                    display: flex; gap: 8px; border-bottom: 2px solid var(--color-border); margin-bottom: 4px; align-items: flex-end; flex-shrink: 0;
                 }
                 .tab-main-archivero {
                     display: flex; align-items: center; gap: 8px; padding: 9px 18px; background: #EAE8E1;
-                    border: 1.5px solid #E0DCD4; border-bottom: none; border-radius: 12px 12px 0 0;
-                    font-size: 0.82rem; font-weight: 800; color: #6B6255; cursor: pointer; transition: all 0.15s ease;
+                    border: 1.5px solid var(--color-border); border-bottom: none; border-radius: 12px 12px 0 0;
+                    font-size: 0.82rem; font-weight: 800; color: var(--color-text-secondary); cursor: pointer; transition: all 0.15s ease;
                     position: relative; bottom: -2px;
                 }
-                .tab-main-archivero:hover { background: #F0EEE8; color: #211C16; }
+                .tab-main-archivero:hover { background: #F0EEE8; color: var(--color-text); }
                 .tab-main-archivero.active {
-                    background: #FFFFFF; color: #123F2C; border-color: #E0DCD4; border-top: 3px solid #1E6B4C;
+                    background: #FFFFFF; color: var(--color-plant-dark); border-color: var(--color-border); border-top: 3px solid var(--color-plant);
                     box-shadow: 0 -2px 8px rgba(0,0,0,0.04);
                 }
                 .badge-tab-main {
@@ -272,124 +295,58 @@ const ModuloOrdenes = {
                     border-radius: 12px; font-size: 0.68rem; font-weight: 800;
                 }
 
-                /* GRID Y TARJETAS KPI */
                 .grid-kpi-ot {
-                    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px;
+                    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; flex-shrink: 0;
                 }
                 @media (max-width: 1100px) { .grid-kpi-ot { grid-template-columns: repeat(2, 1fr); } }
-                @media (max-width: 600px) { .grid-kpi-ot { grid-template-columns: 1fr; } }
 
                 .kpi-card-ot {
-                    background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 12px; padding: 12px 14px;
-                    display: flex; flex-direction: column; justify-content: space-between; gap: 4px;
-                    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03); transition: transform 0.15s ease, box-shadow 0.15s ease;
-                    cursor: pointer;
+                    background: #FFFFFF; border: 1.5px solid var(--color-border); border-radius: var(--radius-md); padding: 10px 14px;
+                    display: flex; flex-direction: column; justify-content: space-between; gap: 2px;
+                    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.03); cursor: pointer;
                 }
-                .kpi-card-ot:hover { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(0, 0, 0, 0.06); }
-                .kpi-header-row { display: flex; justify-content: space-between; align-items: center; }
-                .kpi-card-ot .kpi-label { font-size: 0.62rem; color: #6B6255; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
-                
-                .kpi-icon-pill {
-                    width: 26px; height: 26px; border-radius: 8px; display: flex;
-                    align-items: center; justify-content: center; flex-shrink: 0;
-                }
-                .kpi-card-ot .kpi-value {
-                    font-size: 1.25rem; font-weight: 800; color: #1D1D1F; margin: 0; line-height: 1.15; letter-spacing: -0.3px;
-                }
-                .kpi-subtext { font-size: 0.68rem; color: #8E8E93; font-weight: 500; margin-top: 2px; display: block; }
+                .kpi-card-ot .kpi-label { font-size: 0.62rem; color: var(--color-text-secondary); font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
+                .kpi-card-ot .kpi-value { font-size: 1.25rem; font-weight: 800; color: var(--color-text); margin: 0; }
+                .kpi-subtext { font-size: 0.68rem; color: #8E8E93; font-weight: 500; display: block; margin-top: 2px; }
 
                 .kpi-card-ot.accent-neutral { border-left: 4px solid #4B4F56; }
-                .kpi-card-ot.accent-neutral .kpi-icon-pill { background: #F0F2F5; color: #4B4F56; }
                 .kpi-card-ot.accent-orange { border-left: 4px solid #E08600; }
-                .kpi-card-ot.accent-orange .kpi-icon-pill { background: rgba(224, 134, 0, 0.1); color: #E08600; }
                 .kpi-card-ot.accent-green { border-left: 4px solid #1E6B4C; }
-                .kpi-card-ot.accent-green .kpi-icon-pill { background: rgba(30, 107, 76, 0.1); color: #1E6B4C; }
                 .kpi-card-ot.accent-blue { border-left: 4px solid #0071E3; }
-                .kpi-card-ot.accent-blue .kpi-icon-pill { background: rgba(0, 113, 227, 0.08); color: #0071E3; }
-
-                .panel-box-plant {
-                    background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 14px; padding: 14px;
-                    display: flex; flex-direction: column; gap: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.04);
-                }
 
                 .grid-filtros-ot {
-                    display: grid;
-                    grid-template-columns: 1.8fr repeat(5, 1fr);
-                    gap: 8px;
-                    background: #F8FAFC;
-                    padding: 10px 12px;
-                    border-radius: 10px;
-                    border: 1px solid #E0DCD4;
-                    align-items: center;
-                    margin-bottom: 10px;
-                }
-
-                @media (max-width: 1200px) {
-                    .grid-filtros-ot { grid-template-columns: repeat(3, 1fr); }
+                    display: grid; grid-template-columns: 1.8fr repeat(4, 1fr); gap: 8px;
+                    background: #F8FAFC; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--color-border);
+                    align-items: center; flex-shrink: 0;
                 }
 
                 .input-filtro-ot {
-                    background: #FFFFFF !important;
-                    border: 1px solid #E0DCD4;
-                    padding: 6px 8px;
-                    border-radius: 8px;
-                    color: #1D1D1F;
-                    font-size: 0.76rem;
-                    outline: none;
-                    width: 100%;
-                    box-sizing: border-box;
-                    font-family: 'Roboto', sans-serif;
+                    background: #FFFFFF !important; border: 1px solid var(--color-border); padding: 6px 8px;
+                    border-radius: 8px; color: var(--color-text); font-size: 0.76rem; outline: none; width: 100%;
+                    box-sizing: border-box; font-family: 'Roboto', sans-serif;
                 }
-                .input-filtro-ot:focus { border-color: #1E6B4C; }
+                .input-filtro-ot:focus { border-color: var(--color-plant); }
 
-                /* TABLA STICKY */
-                .wrapper-tabla-ordenes {
-                    max-height: 380px;
-                    overflow-y: auto;
-                    overflow-x: auto;
-                    border-radius: 10px;
-                    border: 1px solid #E0DCD4;
-                    position: relative;
+                .panel-box-full {
+                    background: #FFFFFF; border: 1.5px solid var(--color-border); border-radius: var(--radius-lg);
+                    padding: 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.04);
+                    flex: 1; overflow: hidden;
                 }
 
-                .tabla-ordenes-pro {
-                    width: 100%;
-                    border-collapse: collapse;
-                    font-size: 0.8rem;
-                    text-align: left;
+                .wrapper-tabla-full {
+                    flex: 1; overflow-y: auto; overflow-x: auto; border: 1px solid var(--color-border);
+                    border-radius: 10px; background: #FFFFFF; position: relative;
                 }
 
+                .tabla-ordenes-pro { width: 100%; border-collapse: collapse; font-size: 0.8rem; text-align: left; }
                 .tabla-ordenes-pro th {
-                    background: #123F2C;
-                    color: #FFFFFF;
-                    font-weight: 700;
-                    font-size: 0.68rem;
-                    text-transform: uppercase;
-                    letter-spacing: 0.4px;
-                    padding: 10px 8px;
-                    position: sticky;
-                    top: 0;
-                    z-index: 10;
+                    background: #123F2C; color: #FFFFFF; font-weight: 700; font-size: 0.68rem; text-transform: uppercase;
+                    letter-spacing: 0.4px; padding: 10px 8px; position: sticky; top: 0; z-index: 10;
                 }
-
-                .tabla-ordenes-pro td {
-                    padding: 9px 8px;
-                    border-bottom: 1px solid #E0DCD4;
-                    color: #211C16;
-                    vertical-align: middle;
-                }
-
+                .tabla-ordenes-pro td { padding: 9px 8px; border-bottom: 1px solid var(--color-border); color: var(--color-text); vertical-align: middle; }
                 .tabla-ordenes-pro tbody tr:hover { background: #F8FAFC; }
 
-                .badge-ot-status {
-                    padding: 3px 8px;
-                    border-radius: 6px;
-                    font-size: 0.65rem;
-                    font-weight: 800;
-                    display: inline-block;
-                    letter-spacing: 0.3px;
-                    text-transform: uppercase;
-                }
+                .badge-ot-status { padding: 3px 8px; border-radius: 6px; font-size: 0.65rem; font-weight: 800; display: inline-block; text-transform: uppercase; }
                 .status-terminado { background: rgba(31,169,88,0.1); color: #1FA958; border: 1px solid rgba(31,169,88,0.25); }
                 .status-pendiente { background: rgba(224,134,0,0.1); color: #E08600; border: 1px solid rgba(224,134,0,0.25); }
                 .status-en_proceso { background: rgba(0,113,227,0.1); color: #0071E3; border: 1px solid rgba(0,113,227,0.25); }
@@ -400,190 +357,190 @@ const ModuloOrdenes = {
                     display: inline-flex; align-items: center; gap: 4px;
                 }
                 .btn-accion-plant:hover { background: rgba(30,107,76,0.2); }
-
-                .producto-row { display: grid; grid-template-columns: 1.4fr 2.2fr 1fr 1fr 1fr 1fr 34px; gap: 8px; background: #F8FAFC; padding: 8px 10px; border-radius: 8px; margin-bottom: 6px; align-items: end; border: 1px solid #E0DCD4; }
-                .producto-row-header { display: grid; grid-template-columns: 1.4fr 2.2fr 1fr 1fr 1fr 1fr 34px; gap: 8px; padding: 0 10px; margin-bottom: 4px; font-size: 0.62rem; font-weight: 700; color: #6B6255; text-transform: uppercase; }
                 .lote-tag { background: rgba(30,107,76,0.1); color: #1E6B4C; border: 1px solid rgba(30,107,76,0.25); padding: 3px 8px; border-radius: 6px; display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem; font-weight: 800; margin: 2px; }
             </style>
 
-            ${ComponentesUI.botonVolverCustomHTML("if(window.ModuloRegistracion) ModuloRegistracion.m_dibujarSelectorInicial(); else ComponentesUI.irACategoria('LABORES');", 'Volver al panel de Registración')}
             <div class="ordenes-master-container animated fadeIn">
 
-                <!-- HEADER SUPERIOR -->
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-top:4px; margin-bottom: 10px; flex-wrap: wrap; gap: 10px;">
-                    <div>
-                        <h2 style="margin:0; font-weight: 800; font-size: 1.3rem; letter-spacing: -0.5px; color:#123F2C;">Control de Órdenes y Recetas</h2>
-                        <p style="margin:2px 0 0 0; font-size:0.75rem; color:#6B6255;">Planificación agronómica y auditoría técnica en campo (base Local)</p>
-                    </div>
-                    <div style="display: flex; gap: 8px; align-items: center;">
-                        <button onclick="ModuloOrdenes.m_exportarExcelGlobal()" style="background: #1FA958; color: #FFFFFF; border: none; padding: 7px 14px; border-radius: 8px; font-size: 0.75rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+            <div class="egresos-layout-full animated fadeIn">
+                ${ComponentesUI.botonVolverHTML('LABORES')}
+
+                <!-- HEADER SUPERIOR FULL-WIDTH -->
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; flex-shrink:0;">
+
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <button onclick="ModuloEgresos.m_exportarExcel()" style="background:#1FA958; color:#FFF; border:none; padding:7px 14px; border-radius:8px; font-size:0.75rem; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:5px;">
                             <i data-lucide="file-spreadsheet" style="width:13px; height:13px;"></i> Excel
                         </button>
-                        <button onclick="ModuloOrdenes.m_exportarPDFGlobal()" style="background: #E0342A; color: #FFFFFF; border: none; padding: 7px 14px; border-radius: 8px; font-size: 0.75rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                        <button onclick="ModuloEgresos.m_exportarPDF()" style="background:#E0342A; color:#FFF; border:none; padding:7px 14px; border-radius:8px; font-size:0.75rem; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:5px;">
                             <i data-lucide="file-text" style="width:13px; height:13px;"></i> PDF Reporte
                         </button>
-                        <button onclick="ModuloOrdenes.m_abrirFormulario()" style="background: #1E6B4C; color: #FFFFFF; border: none; padding: 7px 16px; border-radius: 8px; font-size: 0.75rem; font-weight: 700; cursor: pointer; display:flex; align-items:center; gap:6px;">
+                        <button onclick="ModuloEgresos.m_abrirModalCreacion()" style="background:#1E6B4C; color:#FFF; border:none; padding:7px 16px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer; display:flex; align-items:center; gap:6px;">
+                            <i data-lucide="plus-circle" style="width:13px; height:13px;"></i> NUEVO EGRESO
+                        </button>
+                    </div>
+                </div>
+
+                
+                <!-- HEADER SUPERIOR FULL-WIDTH -->
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; flex-shrink:0;">
+                    <div>
+                        <h2 style="margin:0; font-weight:800; font-size:1.3rem; letter-spacing:-0.5px; color:#123F2C;">Control de Órdenes y Recetas</h2>
+                        <p style="margin:2px 0 0 0; font-size:0.75rem; color:#6B6255;">Planificación agronómica y trazabilidad de insumos por lote (Base Local)</p>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <button onclick="ModuloOrdenes.m_exportarExcelGlobal()" style="background:#1FA958; color:#FFFFFF; border:none; padding:7px 14px; border-radius:8px; font-size:0.75rem; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:5px;">
+                            <i data-lucide="file-spreadsheet" style="width:13px; height:13px;"></i> Excel
+                        </button>
+                        <button onclick="ModuloOrdenes.m_exportarPDFGlobal()" style="background:#E0342A; color:#FFFFFF; border:none; padding:7px 14px; border-radius:8px; font-size:0.75rem; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:5px;">
+                            <i data-lucide="file-text" style="width:13px; height:13px;"></i> PDF Reporte
+                        </button>
+                        <button onclick="ModuloOrdenes.m_abrirFormulario()" style="background:#1E6B4C; color:#FFFFFF; border:none; padding:7px 16px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer; display:flex; align-items:center; gap:6px;">
                             <i data-lucide="plus-circle" style="width:13px; height:13px;"></i> NUEVA RECETA
                         </button>
                     </div>
                 </div>
 
-                <!-- TABS ARCHIVERO SUPERIOR -->
+                <!-- SOLAPAS TIPO ARCHIVERO: ACTIVAS / TERMINADAS / ESTADÍSTICAS -->
                 <div class="tabs-header-archivero-main">
-                    <div class="tab-main-archivero ${this.tablaTabEstado === 'ACTIVAS' ? 'active' : ''}" onclick="ModuloOrdenes.m_cambiarTabTablaOrdenes('ACTIVAS')">
-                        <i data-lucide="clock" style="width:14px; height:14px;"></i>
-                        <span>ÓRDENES PENDIENTES / ACTIVAS</span>
+                    <div class="tab-main-archivero ${this.vistaTabSuperior === 'ACTIVAS' ? 'active' : ''}" onclick="ModuloOrdenes.m_cambiarTabSuperior('ACTIVAS')">
+                        <i data-lucide="clock" style="width:14px; height:14px; color:#E08600;"></i>
+                        <span>1. ÓRDENES ACTIVAS</span>
                         <span class="badge-tab-orange" id="tab-badge-ot-activas">0</span>
                     </div>
-                    <div class="tab-main-archivero ${this.tablaTabEstado === 'TERMINADAS' ? 'active' : ''}" onclick="ModuloOrdenes.m_cambiarTabTablaOrdenes('TERMINADAS')">
-                        <i data-lucide="check-circle" style="width:14px; height:14px;"></i>
-                        <span>ÓRDENES TERMINADAS</span>
+                    <div class="tab-main-archivero ${this.vistaTabSuperior === 'TERMINADAS' ? 'active' : ''}" onclick="ModuloOrdenes.m_cambiarTabSuperior('TERMINADAS')">
+                        <i data-lucide="check-circle" style="width:14px; height:14px; color:#1FA958;"></i>
+                        <span>2. ÓRDENES TERMINADAS</span>
                         <span class="badge-tab-main" id="tab-badge-ot-terminadas">0</span>
+                    </div>
+                    <div class="tab-main-archivero ${this.vistaTabSuperior === 'ESTADISTICAS' ? 'active' : ''}" onclick="ModuloOrdenes.m_cambiarTabSuperior('ESTADISTICAS')">
+                        <i data-lucide="bar-chart-2" style="width:14px; height:14px; color:#0071E3;"></i>
+                        <span>3. ESTADÍSTICAS Y GRÁFICOS</span>
                     </div>
                 </div>
 
                 <!-- KPIS PRINCIPALES -->
                 <div class="grid-kpi-ot">
-                    <div class="kpi-card-ot accent-neutral" onclick="ModuloOrdenes.m_filtrarEstadoDirecto('')">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">TOTAL ÓRDENES EMITIDAS</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="clipboard-list" style="width:14px; height:14px;"></i>
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value" id="kpi_ot_total_cant">0 OTs</h3>
-                            <span class="kpi-subtext" id="kpi_ot_total_has">0.00 Ha Cobertura</span>
-                        </div>
+                    <div class="kpi-card-ot accent-neutral" onclick="ModuloOrdenes.m_cambiarTabSuperior('ACTIVAS')">
+                        <span class="kpi-label">TOTAL ÓRDENES EMITIDAS</span>
+                        <h3 class="kpi-value" id="kpi_ot_total_cant">0 OTs</h3>
+                        <span class="kpi-subtext" id="kpi_ot_total_has">0.00 Ha Cobertura</span>
                     </div>
-
-                    <div class="kpi-card-ot accent-orange" onclick="ModuloOrdenes.m_filtrarEstadoDirecto('PENDIENTE')">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">PENDIENTES DE LABOR</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="clock" style="width:14px; height:14px;"></i>
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value" style="color:#E08600;" id="kpi_ot_pendientes">0</h3>
-                            <span class="kpi-subtext">Por ejecutar en lote</span>
-                        </div>
+                    <div class="kpi-card-ot accent-orange" onclick="ModuloOrdenes.m_cambiarTabSuperior('ACTIVAS')">
+                        <span class="kpi-label">PENDIENTES DE LABOR</span>
+                        <h3 class="kpi-value" style="color:#E08600;" id="kpi_ot_pendientes">0</h3>
+                        <span class="kpi-subtext">Por ejecutar en lote</span>
                     </div>
-
-                    <div class="kpi-card-ot accent-green" onclick="ModuloOrdenes.m_filtrarEstadoDirecto('TERMINADO')">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">ÓRDENES FINALIZADAS</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="check-check" style="width:14px; height:14px;"></i>
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value" style="color:#1E6B4C;" id="kpi_ot_terminadas">0</h3>
-                            <span class="kpi-subtext">Aplicadas con éxito</span>
-                        </div>
+                    <div class="kpi-card-ot accent-green" onclick="ModuloOrdenes.m_cambiarTabSuperior('TERMINADAS')">
+                        <span class="kpi-label">ÓRDENES FINALIZADAS</span>
+                        <h3 class="kpi-value" style="color:#1E6B4C;" id="kpi_ot_terminadas">0</h3>
+                        <span class="kpi-subtext">Aplicadas con éxito</span>
                     </div>
-
                     <div class="kpi-card-ot accent-blue">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">INVERSIÓN TOTAL EN RECETAS</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="dollar-sign" style="width:14px; height:14px;"></i>
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value" style="color:#0071E3;" id="kpi_ot_total_usd">U$S 0.00</h3>
-                            <span class="kpi-subtext" id="kpi_ot_total_ars">$ 0.00 ARS</span>
-                        </div>
+                        <span class="kpi-label">INVERSIÓN TOTAL EN RECETAS</span>
+                        <h3 class="kpi-value" style="color:#0071E3;" id="kpi_ot_total_usd">U$S 0.00</h3>
+                        <span class="kpi-subtext" id="kpi_ot_total_ars">$ 0.00 ARS</span>
                     </div>
                 </div>
 
-                <!-- BARRA DE FILTROS CASCADA -->
-                <div class="grid-filtros-ot">
-                    <div>
-                        <input type="text" id="ot_filtro_texto" placeholder="🔍 OT, Insumo, Campo, Contratista..." oninput="ModuloOrdenes.m_filtrarCascada()" class="input-filtro-ot">
-                    </div>
-                    <div>
-                        <select id="ot_filtro_est" onchange="ModuloOrdenes.m_filtrarCascada()" class="input-filtro-ot">
-                            <option value="">🏢 Todos los Establecimientos</option>
-                            ${estUnicos.map(e => `<option value="${e}">${e}</option>`).join('')}
-                        </select>
-                    </div>
-                    <div>
-                        <select id="ot_filtro_estado" onchange="ModuloOrdenes.m_filtrarCascada()" class="input-filtro-ot">
-                            <option value="">Estado: Todos</option>
-                            <option value="PENDIENTE">⏳ Pendientes</option>
-                            <option value="EN PROCESO">🚜 En Proceso</option>
-                            <option value="TERMINADO">✅ Terminadas</option>
-                        </select>
-                    </div>
-                    <div>
-                        <select id="ot_filtro_rubro" onchange="ModuloOrdenes.m_filtrarCascada()" class="input-filtro-ot">
-                            <option value="">🛠️ Todos los Rubros</option>
-                            ${rubrosUnicos.map(r => `<option value="${r}">${r}</option>`).join('')}
-                        </select>
-                    </div>
-                    <div>
-                        <input type="date" id="ot_filtro_desde" onchange="ModuloOrdenes.m_filtrarCascada()" class="input-filtro-ot" title="Fecha Desde">
-                    </div>
-                    <div>
-                        <input type="date" id="ot_filtro_hasta" onchange="ModuloOrdenes.m_filtrarCascada()" class="input-filtro-ot" title="Fecha Hasta">
-                    </div>
-                </div>
-
-                <!-- GRÁFICOS ANALÍTICOS -->
-                <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 12px; margin-bottom: 12px;">
-                    <div class="panel-box-plant" style="padding:12px;">
-                        <span style="font-size: 0.72rem; font-weight: 800; color: #123F2C; text-transform:uppercase;">Estado de las Órdenes de Trabajo</span>
-                        <div style="height: 160px; position: relative;">
-                            <canvas id="chart_ot_estados"></canvas>
-                        </div>
-                    </div>
-                    <div class="panel-box-plant" style="padding:12px;">
-                        <span style="font-size: 0.72rem; font-weight: 800; color: #123F2C; text-transform:uppercase;">Inversión por Establecimiento (U$S)</span>
-                        <div style="height: 160px; position: relative;">
-                            <canvas id="chart_ot_inversion"></canvas>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- TABLA EJECUTIVA CON CABECERAS FIJAS -->
-                <div class="panel-box-plant">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-size: 0.75rem; font-weight: 800; color: #123F2C; text-transform:uppercase; letter-spacing:0.4px;">
-                            📋 Registro de Órdenes y Recetas Agronómicas
-                        </span>
-                        <span style="font-size: 0.7rem; background: #F0F2F5; color: #6B6255; padding: 3px 8px; border-radius: 10px; font-weight: 800;" id="lbl_ot_cant_registros">0 Órdenes</span>
-                    </div>
-
-                    <div class="wrapper-tabla-ordenes scroll-apple">
-                        <table class="tabla-ordenes-pro">
-                            <thead>
-                                <tr>
-                                    <th style="width: 110px;">Estado</th>
-                                    <th style="width: 120px;">OT / Ref</th>
-                                    <th style="width: 90px;">Fecha</th>
-                                    <th>Establecimiento & Campo</th>
-                                    <th>Lotes</th>
-                                    <th>Labor / CC</th>
-                                    <th style="text-align: right; width: 120px;">Costo Total U$S</th>
-                                    <th style="text-align: center; width: 90px;">Acciones</th>
-                                </tr>
-                            </thead>
-                            <tbody id="tbody_ot_principal"></tbody>
-                            <tfoot>
-                                <tr>
-                                    <td colspan="6" style="text-align:left; font-weight:800;">TOTAL VISIBLE EN SELECCIÓN:</td>
-                                    <td id="ft_ot_usd" style="text-align:right; font-weight:800; color:#1E6B4C; font-family:monospace;">U$S 0.00</td>
-                                    <td></td>
-                                </tr>
-                            </tfoot>
-                        </table>
-                    </div>
-                </div>
+                <!-- CONTENIDO SEGÚN SOLAPA ACTIVA -->
+                ${this.vistaTabSuperior === 'ESTADISTICAS' ? this.m_renderVistaEstadisticas() : this.m_renderVistaTablas(estUnicos, rubrosUnicos)}
 
             </div>
         `;
         if (window.lucide) lucide.createIcons();
+    },
+
+    m_renderVistaTablas: function(estUnicos, rubrosUnicos) {
+        return `
+            <!-- BARRA DE FILTROS CASCADA -->
+            <div class="grid-filtros-ot">
+                <div>
+                    <input type="text" id="ot_filtro_texto" placeholder="🔍 Buscar OT, Ref, Insumo, Campo..." oninput="ModuloOrdenes.m_filtrarCascada()" class="input-filtro-ot">
+                </div>
+                <div>
+                    <select id="ot_filtro_est" onchange="ModuloOrdenes.m_filtrarCascada()" class="input-filtro-ot">
+                        <option value="">🏢 Todos los Establecimientos</option>
+                        ${estUnicos.map(e => `<option value="${e}">${e}</option>`).join('')}
+                    </select>
+                </div>
+                <div>
+                    <select id="ot_filtro_rubro" onchange="ModuloOrdenes.m_filtrarCascada()" class="input-filtro-ot">
+                        <option value="">🛠️ Todos los Rubros</option>
+                        ${rubrosUnicos.map(r => `<option value="${r}">${r}</option>`).join('')}
+                    </select>
+                </div>
+                <div>
+                    <input type="date" id="ot_filtro_desde" onchange="ModuloOrdenes.m_filtrarCascada()" class="input-filtro-ot" title="Fecha Desde">
+                </div>
+                <div>
+                    <input type="date" id="ot_filtro_hasta" onchange="ModuloOrdenes.m_filtrarCascada()" class="input-filtro-ot" title="Fecha Hasta">
+                </div>
+            </div>
+
+            <!-- CONTENEDOR EXPANDIDO CON TABLA DE ÓRDENES -->
+            <div class="panel-box-full">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+                    <span style="font-size: 0.75rem; font-weight: 800; color: #123F2C; text-transform:uppercase; letter-spacing:0.4px;">
+                        📋 ${this.vistaTabSuperior === 'ACTIVAS' ? 'Listado de Órdenes Pendientes y en Proceso' : 'Historial de Órdenes Concluidas'}
+                    </span>
+                    <span style="font-size: 0.7rem; background: #F0F2F5; color: #6B6255; padding: 3px 8px; border-radius: 10px; font-weight: 800;" id="lbl_ot_cant_registros">0 Órdenes</span>
+                </div>
+
+                <div class="wrapper-tabla-full scroll-apple">
+                    <table class="tabla-ordenes-pro">
+                        <thead>
+                            <tr>
+                                <th style="width: 110px;">Estado</th>
+                                <th style="width: 120px;">OT / Ref</th>
+                                <th style="width: 90px;">Fecha</th>
+                                <th>Establecimiento & Campo</th>
+                                <th>Lotes</th>
+                                <th>Labor / CC</th>
+                                <th style="text-align: right; width: 120px;">Costo Total U$S</th>
+                                <th style="text-align: center; width: 90px;">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tbody_ot_principal"></tbody>
+                        <tfoot>
+                            <tr>
+                                <td colspan="6" style="text-align:left; font-weight:800;">TOTAL VISIBLE EN SELECCIÓN:</td>
+                                <td id="ft_ot_usd" style="text-align:right; font-weight:800; color:#1E6B4C; font-family:monospace;">U$S 0.00</td>
+                                <td></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
+        `;
+    },
+
+    m_renderVistaEstadisticas: function() {
+        return `
+            <div class="panel-box-full" style="display:flex; flex-direction:column; gap:14px; overflow-y:auto;">
+                <span style="font-size:0.75rem; font-weight:800; color:#123F2C; text-transform:uppercase;">📊 Panel Analítico y Métricas Gráficas</span>
+                <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 14px; flex: 1;">
+                    <div style="background:#F8FAFC; border:1px solid #E0DCD4; border-radius:12px; padding:16px; display:flex; flex-direction:column;">
+                        <span style="font-size: 0.75rem; font-weight: 800; color: #123F2C; text-transform:uppercase; margin-bottom:10px;">Estado de las Órdenes</span>
+                        <div style="flex:1; min-height:260px; position:relative;">
+                            <canvas id="chart_ot_estados"></canvas>
+                        </div>
+                    </div>
+                    <div style="background:#F8FAFC; border:1px solid #E0DCD4; border-radius:12px; padding:16px; display:flex; flex-direction:column;">
+                        <span style="font-size: 0.75rem; font-weight: 800; color: #123F2C; text-transform:uppercase; margin-bottom:10px;">Inversión por Establecimiento (U$S)</span>
+                        <div style="flex:1; min-height:260px; position:relative;">
+                            <canvas id="chart_ot_inversion"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    },
+
+    m_cambiarTabSuperior: function(tab) {
+        this.vistaTabSuperior = tab;
+        this.m_dibujarInterfaz();
+        this.m_filtrarCascada();
     },
 
     m_obtenerGruposOrdenes: function(listaOrdenes) {
@@ -627,7 +584,6 @@ const ModuloOrdenes = {
         return {
             texto: (document.getElementById('ot_filtro_texto')?.value || '').toLowerCase().trim(),
             est: (document.getElementById('ot_filtro_est')?.value || '').toLowerCase(),
-            estado: document.getElementById('ot_filtro_estado')?.value || '',
             rubro: (document.getElementById('ot_filtro_rubro')?.value || '').toLowerCase(),
             desde: document.getElementById('ot_filtro_desde')?.value || '',
             hasta: document.getElementById('ot_filtro_hasta')?.value || ''
@@ -643,11 +599,10 @@ const ModuloOrdenes = {
                 const estMatch = g.establecimiento.toLowerCase().includes(f.texto);
                 const campoMatch = g.campo.toLowerCase().includes(f.texto);
                 const conMatch = g.contratista.toLowerCase().includes(f.texto);
-                const insMatch = g.filasRaw.some(r => (r.insumo || '').toLowerCase().includes(f.texto));
+                const insMatch = g.filasRaw.some(r => (r.insumo || '').toLowerCase().includes(f.texto) || (r.cod_articulo || '').toLowerCase().includes(f.texto));
                 if (!otMatch && !refMatch && !estMatch && !campoMatch && !conMatch && !insMatch) return false;
             }
             if (f.est && !g.establecimiento.toLowerCase().includes(f.est)) return false;
-            if (f.estado && g.estado !== f.estado) return false;
             if (f.rubro && !g.tipo_labor.toLowerCase().includes(f.rubro)) return false;
             if (f.desde && g.fecha && g.fecha < f.desde) return false;
             if (f.hasta && g.fecha && g.fecha > f.hasta) return false;
@@ -664,43 +619,25 @@ const ModuloOrdenes = {
 
         const datosTabla = datosGlobales.filter(g => {
             const terminado = this.m_esGrupoTerminado(g);
-            if (this.tablaTabEstado === 'TERMINADAS') return terminado;
+            if (this.vistaTabSuperior === 'TERMINADAS') return terminado;
             return !terminado;
         });
 
-        this.m_actualizarBadgesTabTablaOrdenes(datosGlobales);
-        this.m_renderizarTabla(datosTabla);
+        this.m_actualizarBadgesTabSuperior(datosGlobales);
         this.m_actualizarKPIs(datosGlobales);
-        this.m_renderizarGraficos(datosGlobales);
+
+        if (this.vistaTabSuperior === 'ESTADISTICAS') {
+            this.m_renderizarGraficos(datosGlobales);
+        } else {
+            this.m_renderizarTabla(datosTabla);
+        }
     },
 
-    m_cambiarTabTablaOrdenes: function(tab) {
-        this.tablaTabEstado = tab;
-        document.querySelectorAll('.tab-main-archivero').forEach(btn => {
-            btn.classList.toggle('active', (tab === 'ACTIVAS' && btn.innerText.includes('ACTIVAS')) || (tab === 'TERMINADAS' && btn.innerText.includes('TERMINADAS')));
-        });
-        this.m_filtrarCascada();
-    },
-
-    m_actualizarBadgesTabTablaOrdenes: function(datosGlobales) {
+    m_actualizarBadgesTabSuperior: function(datosGlobales) {
         const badgeActivas = document.getElementById('tab-badge-ot-activas');
         const badgeTerminadas = document.getElementById('tab-badge-ot-terminadas');
         if (badgeActivas) badgeActivas.innerText = datosGlobales.filter(g => !this.m_esGrupoTerminado(g)).length;
         if (badgeTerminadas) badgeTerminadas.innerText = datosGlobales.filter(g => this.m_esGrupoTerminado(g)).length;
-    },
-
-    m_filtrarEstadoDirecto: function(stKey) {
-        const selState = document.getElementById('ot_filtro_estado');
-        if (selState) selState.value = stKey;
-
-        if (stKey === 'TERMINADO') this.tablaTabEstado = 'TERMINADAS';
-        else if (stKey === 'PENDIENTE' || stKey === 'EN PROCESO') this.tablaTabEstado = 'ACTIVAS';
-
-        document.querySelectorAll('.tab-main-archivero').forEach(btn => {
-            btn.classList.toggle('active', (this.tablaTabEstado === 'ACTIVAS' && btn.innerText.includes('ACTIVAS')) || (this.tablaTabEstado === 'TERMINADAS' && btn.innerText.includes('TERMINADAS')));
-        });
-
-        this.m_filtrarCascada();
     },
 
     m_renderizarTabla: function(datos) {
@@ -714,7 +651,7 @@ const ModuloOrdenes = {
             tbody.innerHTML = `
                 <tr>
                     <td colspan="8" style="text-align: center; padding: 35px; color: #9AA0A6; font-style:italic;">
-                        No se encontraron órdenes de trabajo para los filtros seleccionados.
+                        No se encontraron órdenes para la solapa y filtros seleccionados.
                     </td>
                 </tr>`;
             return;
@@ -731,16 +668,14 @@ const ModuloOrdenes = {
                         <strong style="color:#0071E3; font-size:0.83rem;">OT #${o.orden_trab}</strong>
                         <div style="font-size:0.68rem; color:#6B6255;">Ref: ${o.ref_orden || '-'}</div>
                     </td>
-                    <td style="color:#6B6255; font-weight:600;">
-                        ${o.fecha}
-                    </td>
+                    <td style="color:#6B6255; font-weight:600;">${o.fecha}</td>
                     <td>
                         <strong>${o.establecimiento}</strong>
                         <div style="font-size:0.7rem; color:#6B6255;">📍 ${o.campo}</div>
                     </td>
                     <td>
                         <span style="background:rgba(30,107,76,0.1); color:#1E6B4C; padding:2px 6px; border-radius:4px; font-weight:800; font-size:0.72rem;">
-                            Lote(s): ${o.cuadros.join(', ') || 'Gral'}
+                            Lotes: ${o.cuadros.join(', ') || 'Gral'}
                         </span>
                     </td>
                     <td>
@@ -752,7 +687,7 @@ const ModuloOrdenes = {
                         U$S ${o.costo_final.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}
                     </td>
                     <td style="text-align: center;" onclick="event.stopPropagation();">
-                        <button class="btn-accion-plant" onclick="ModuloOrdenes.m_verDetalleFlotante(${o.orden_trab}, '${o.ref_orden}')" title="Ver Detalle de OT">
+                        <button class="btn-accion-plant" onclick="ModuloOrdenes.m_verDetalleFlotante(${o.orden_trab}, '${o.ref_orden}')" title="Ver Receta y Consumos">
                             👁️ Ver
                         </button>
                     </td>
@@ -782,7 +717,8 @@ const ModuloOrdenes = {
         set('kpi_ot_total_usd', `U$S ${totalUsd.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`);
         set('kpi_ot_total_ars', `$ ${totalArs.toLocaleString('es-AR', {minimumFractionDigits:0, maximumFractionDigits:0})} ARS`);
 
-        set('ft_ot_usd', `U$S ${totalUsd.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`);
+        const elFt = document.getElementById('ft_ot_usd');
+        if (elFt) elFt.innerText = `U$S ${totalUsd.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
     },
 
     m_renderizarGraficos: function(datos) {
@@ -813,7 +749,7 @@ const ModuloOrdenes = {
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { position: 'right', labels: { boxWidth: 10, font: { family: 'Roboto', size: 10 } } }
+                        legend: { position: 'bottom', labels: { boxWidth: 12, font: { family: 'Roboto', size: 10 } } }
                     }
                 }
             });
@@ -860,7 +796,7 @@ const ModuloOrdenes = {
             this.m_asegurarModalBase();
             
             const modalContent = document.querySelector('.modal-apple-content');
-            if (modalContent) modalContent.style.maxWidth = '920px';
+            if (modalContent) modalContent.style.maxWidth = '940px';
 
             const registrosOT = this.parametros.ordenes.filter(o => String(o.orden_trab) === String(ot) && (o.ref_orden || 'SIN-REF').toString() === ref.toString());
             if (registrosOT.length === 0) return;
@@ -870,17 +806,19 @@ const ModuloOrdenes = {
             const titulo = document.getElementById('modal-titulo');
             
             if (titulo) {
-                titulo.innerText = `DETALLE DE ORDEN DE TRABAJO N° ${ot}`;
+                titulo.innerText = `RECETA Y CONSUMO DE ORDEN DE TRABAJO N° ${ot}`;
             }
 
             let htmlDetalleInsumos = `
-                <div style="margin-top: 14px; background: #F8FAFC; border: 1px solid #E0DCD4; padding: 14px; border-radius: 12px;">
-                    <span style="font-size:0.68rem; font-weight:800; display:block; margin-bottom:8px; color:#123F2C; letter-spacing:0.4px; text-transform: uppercase;">Insumos Asignados y Dosificación</span>
+                <div style="margin-top: 14px; background: #F8FAFC; border: 1.5px solid #E0DCD4; padding: 14px; border-radius: 12px;">
+                    <span style="font-size:0.75rem; font-weight:800; display:block; margin-bottom:8px; color:#123F2C; text-transform: uppercase;">
+                        🧪 Receta Técnica de Insumos y Dosificación por Lote
+                    </span>
                     <table style="width:100%; font-size:0.8rem; border-collapse:collapse;">
                         <thead>
                             <tr style="border-bottom:2px solid #E0DCD4; color:#6B6255; font-size:0.68rem; font-weight:700;">
                                 <th align="left" style="padding:8px 6px;">CUADRO</th>
-                                <th align="left" style="padding:8px 6px;">INSUMO RECETADO</th>
+                                <th align="left" style="padding:8px 6px;">CÓDIGO / INSUMO RECETADO</th>
                                 <th align="center" style="padding:8px 6px;">DOSIS/HA</th>
                                 <th align="right" style="padding:8px 6px;">CONSUMO</th>
                                 <th align="right" style="padding:8px 6px;">U$S TOTAL</th>
@@ -897,7 +835,10 @@ const ModuloOrdenes = {
                 htmlDetalleInsumos += `
                     <tr style="border-bottom:1px solid #E0DCD4;">
                         <td style="padding:7px 6px; font-weight:700;">Lote ${r.cuadro} <small style="color:#6B6255;">(${r.sup_uso} ha)</small></td>
-                        <td style="padding:7px 6px; color:#123F2C; font-weight:700;">🌱 ${r.insumo} <small style="color:#6B6255;">[${r.deposito_origen || 'S/D'}]</small></td>
+                        <td style="padding:7px 6px; color:#123F2C; font-weight:700;">
+                            <div>🌱 ${r.insumo}</div>
+                            ${r.cod_articulo ? `<div style="font-size:0.68rem; color:#0071E3; font-family:monospace;">COD: ${r.cod_articulo} &bull; [${r.deposito_origen || 'S/D'}]</div>` : `<div style="font-size:0.68rem; color:#6B6255;">[${r.deposito_origen || 'S/D'}]</div>`}
+                        </td>
                         <td align="center" style="padding:7px 6px;">${parseFloat(r.dosis_ha || 0).toFixed(2)}</td>
                         <td align="right" style="padding:7px 6px; color:#E0342A; font-weight:700;">${parseFloat(r.total_consumo || 0).toFixed(2)}</td>
                         <td align="right" style="padding:7px 6px; color:#1E6B4C; font-weight:800;">U$S ${parseFloat(r.total_dolar || 0).toFixed(2)}</td>
@@ -919,7 +860,7 @@ const ModuloOrdenes = {
                 container.innerHTML = `
                     <div style="display:flex; flex-direction:column; gap:12px; font-family:'Roboto', sans-serif;">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <span style="font-size:0.68rem; font-weight:800; color:#123F2C; text-transform: uppercase;">Datos Generales de Cabecera</span>
+                            <span style="font-size:0.75rem; font-weight:800; color:#123F2C; text-transform: uppercase;">📋 Cabecera de la Orden</span>
                             <button type="button" onclick="ModuloOrdenes.m_editarCabeceraForm(${ot}, '${ref}')" class="btn-accion-plant">
                                 ⚙️ Editar Cabecera
                             </button>
@@ -933,7 +874,7 @@ const ModuloOrdenes = {
                             <div><label style="color:#6B6255; font-size:0.65rem; font-weight:700; text-transform:uppercase;">Labor</label><p style="margin:2px 0; font-weight:700;">${infoCabecera.tipo_labor}</p></div>
                             <div><label style="color:#6B6255; font-size:0.65rem; font-weight:700; text-transform:uppercase;">Contratista</label><p style="margin:2px 0; font-weight:700;">${infoCabecera.contratista || '-'}</p></div>
                             <div><label style="color:#6B6255; font-size:0.65rem; font-weight:700; text-transform:uppercase;">Cotización</label><p style="margin:2px 0; font-weight:700; color:#0071E3;">$ ${infoCabecera.cotizacion}</p></div>
-                            <div><label style="color:#6B6255; font-size:0.65rem; font-weight:700; text-transform:uppercase;">Inversión OT Total</label><p style="margin:2px 0; font-weight:900; color:#1E6B4C; font-size:1.1rem;">U$S ${registrosOT.reduce((a,c)=>a+parseFloat(c.costo_final||0),0).toFixed(2)}</p></div>
+                            <div><label style="color:#6B6255; font-size:0.65rem; font-weight:700; text-transform:uppercase;">Inversión Total OT</label><p style="margin:2px 0; font-weight:900; color:#1E6B4C; font-size:1.1rem;">U$S ${registrosOT.reduce((a,c)=>a+parseFloat(c.costo_final||0),0).toFixed(2)}</p></div>
                         </div>
 
                         ${htmlDetalleInsumos}
@@ -1067,63 +1008,63 @@ const ModuloOrdenes = {
     },
 
     m_guardarCabeceraCompleta: async function(ot, ref, btnElement) {
-    const nuevaFecha = document.getElementById('cab_edit_fecha')?.value;
-    const refVal = document.getElementById('cab_edit_ref_orden')?.value;
-    const nuevaRef = refVal && refVal.trim() !== '' ? parseInt(refVal, 10) : null;
-    const nuevoEstablecimiento = (document.getElementById('cab_edit_establecimiento')?.value || '').trim().toUpperCase();
-    const nuevoEstado = document.getElementById('cab_edit_estado')?.value;
-    const nuevaLabor = (document.getElementById('cab_edit_tipo_labor')?.value || '').trim().toUpperCase();
-    const nuevoContratista = (document.getElementById('cab_edit_contratista')?.value || '').trim().toUpperCase();
-    const nuevaCotizacion = parseFloat(document.getElementById('cab_edit_cotizacion')?.value);
+        const nuevaFecha = document.getElementById('cab_edit_fecha')?.value;
+        const refVal = document.getElementById('cab_edit_ref_orden')?.value;
+        const nuevaRef = refVal && refVal.trim() !== '' ? parseInt(refVal, 10) : null;
+        const nuevoEstablecimiento = (document.getElementById('cab_edit_establecimiento')?.value || '').trim().toUpperCase();
+        const nuevoEstado = document.getElementById('cab_edit_estado')?.value;
+        const nuevaLabor = (document.getElementById('cab_edit_tipo_labor')?.value || '').trim().toUpperCase();
+        const nuevoContratista = (document.getElementById('cab_edit_contratista')?.value || '').trim().toUpperCase();
+        const nuevaCotizacion = parseFloat(document.getElementById('cab_edit_cotizacion')?.value);
 
-    if (!nuevaFecha || !nuevoEstablecimiento || !nuevaLabor || isNaN(nuevaCotizacion) || nuevaCotizacion <= 0) {
-        return this.m_mostrarNotificacion("Complete los campos obligatorios.", "error");
-    }
-
-    try {
-        const refParam = ref === 'SIN-REF' ? null : ref;
-
-        const sqlUpdate = `
-            UPDATE egresos_insumos SET
-                fecha = ?, 
-                ref_orden = ?, 
-                establecimiento = ?, 
-                estado = ?,
-                tipo_labor = ?, 
-                centro_costo = ?, 
-                contratista = ?, 
-                cotizacion = ?,
-                total_pesos = ROUND(total_dolar * ?, 4), 
-                sincronizado = 0
-            WHERE orden_trab = ? AND (ref_orden = ? OR (? IS NULL AND ref_orden IS NULL))
-        `;
-
-        await this.m_ejecutarSqlLocal(sqlUpdate, [
-            nuevaFecha, 
-            nuevaRef, 
-            nuevoEstablecimiento, 
-            nuevoEstado,
-            nuevaLabor, 
-            nuevaLabor, 
-            nuevoContratista, 
-            nuevaCotizacion,
-            nuevaCotizacion, 
-            ot, 
-            refParam, 
-            refParam
-        ]);
-
-        this.m_mostrarNotificacion("Cabecera y totales actualizados con éxito.", "exito");
-        await this.m_inicializar();
-        
-        if (typeof this.m_verDetalleFlotante === 'function') {
-            this.m_verDetalleFlotante(ot, nuevaRef !== null ? nuevaRef : 'SIN-REF');
+        if (!nuevaFecha || !nuevoEstablecimiento || !nuevaLabor || isNaN(nuevaCotizacion) || nuevaCotizacion <= 0) {
+            return this.m_mostrarNotificacion("Complete los campos obligatorios.", "error");
         }
-    } catch (err) {
-        console.error("❌ Error al guardar cabecera:", err);
-        this.m_mostrarNotificacion("Error al actualizar cambios locales: " + err.message, "error");
-    }
-},
+
+        try {
+            const refParam = ref === 'SIN-REF' ? null : ref;
+
+            const sqlUpdate = `
+                UPDATE egresos_insumos SET
+                    fecha = ?, 
+                    ref_orden = ?, 
+                    establecimiento = ?, 
+                    estado = ?,
+                    tipo_labor = ?, 
+                    centro_costo = ?, 
+                    contratista = ?, 
+                    cotizacion = ?,
+                    total_pesos = ROUND(total_dolar * ?, 4), 
+                    sincronizado = 0
+                WHERE orden_trab = ? AND (ref_orden = ? OR (? IS NULL AND ref_orden IS NULL))
+            `;
+
+            await this.m_ejecutarSqlLocal(sqlUpdate, [
+                nuevaFecha, 
+                nuevaRef, 
+                nuevoEstablecimiento, 
+                nuevoEstado,
+                nuevaLabor, 
+                nuevaLabor, 
+                nuevoContratista, 
+                nuevaCotizacion,
+                nuevaCotizacion, 
+                ot, 
+                refParam, 
+                refParam
+            ]);
+
+            this.m_mostrarNotificacion("Cabecera y totales actualizados con éxito.", "exito");
+            await this.m_inicializar();
+            
+            if (typeof this.m_verDetalleFlotante === 'function') {
+                this.m_verDetalleFlotante(ot, nuevaRef !== null ? nuevaRef : 'SIN-REF');
+            }
+        } catch (err) {
+            console.error("❌ Error al guardar cabecera:", err);
+            this.m_mostrarNotificacion("Error al actualizar cambios locales: " + err.message, "error");
+        }
+    },
 
     m_editarFilaRegistro: async function(idRegistro) {
         const reg = this.parametros.ordenes.find(o => String(o.id) === String(idRegistro) || String(o.reg_local) === String(idRegistro));
@@ -1278,6 +1219,10 @@ const ModuloOrdenes = {
                 const costoFinalHaDolar = supLote > 0 ? (costoFinalFila / supLote) : 0;
 
                 try {
+                    const matchInsumo = (ModuloOrdenes.parametros.insumosMaestros || []).find(m => (m.articulo || '').trim().toUpperCase() === nuevoInsumo.toUpperCase())
+                                     || (ModuloOrdenes.parametros.insumos || []).find(m => (m.articulo || '').trim().toUpperCase() === nuevoInsumo.toUpperCase());
+                    const codArtActualizado = matchInsumo?.reg_local || matchInsumo?.cod_articulo || reg.cod_articulo || null;
+
                     const sqlUpdate = `
                         UPDATE egresos_insumos SET
                             orden_trab = ?, ref_orden = ?, fecha = ?, deposito_origen = ?,
@@ -1285,7 +1230,7 @@ const ModuloOrdenes = {
                             insumo = ?, imp_uni = ?, dosis_ha = ?, cotizacion = ?,
                             total_consumo = ?, total_dolar = ?, total_pesos = ?,
                             costo_final = ?, costo_final_ha_dolar = ?, comentario = ?,
-                            sincronizado = 0
+                            cod_articulo = ?, sincronizado = 0
                         WHERE id = ? OR reg_local = ?
                     `;
 
@@ -1295,9 +1240,9 @@ const ModuloOrdenes = {
                         nuevoInsumo, nuevoValorUss, nuevaDosis, cotizacionNum,
                         nuevoConsumo, nuevoTotalDolar, nuevoTotalPesos,
                         costoFinalFila, costoFinalHaDolar, `Modificado desde panel de control. Lote: ${nuevoCuadro}.`,
-                        reg.id, reg.reg_local
+                        codArtActualizado, reg.id, reg.reg_local
                     ]);
-
+                    
                     this.m_mostrarNotificacion("Registro actualizado con éxito en base local.", "exito");
                     await this.m_inicializar();
                     this.m_verDetalleFlotante(otNum, refNum || 'SIN-REF');
@@ -1342,7 +1287,6 @@ const ModuloOrdenes = {
             this.m_asegurarModalBase();
 
             const modalContent = document.querySelector('.modal-apple-content');
-            // Ancho optimizado para eliminar espacios vacíos innecesarios
             if (modalContent) modalContent.style.maxWidth = '780px';
 
             this.lotesSeleccionados = [];
@@ -1359,7 +1303,6 @@ const ModuloOrdenes = {
             if (container) {
                 container.innerHTML = `
                     <style>
-                        /* Solapas tipo archivero con acentos cromáticos */
                         .tabs-header-archivero-receta {
                             display: flex; gap: 8px; border-bottom: 2px solid #E0DCD4; margin-bottom: 12px; align-items: flex-end;
                         }
@@ -1371,7 +1314,6 @@ const ModuloOrdenes = {
                         }
                         .tab-receta-arch:hover { background: #F0EEE8; color: #1D1D1F; }
                         
-                        /* Colores dinámicos por paso */
                         .tab-receta-arch.active[data-tab="1"] {
                             background: #FFFFFF; color: #0071E3; border-top: 3px solid #0071E3; box-shadow: 0 -2px 6px rgba(0,113,227,0.08);
                         }
@@ -1385,18 +1327,10 @@ const ModuloOrdenes = {
                         .badge-tab-receta {
                             padding: 2px 7px; border-radius: 12px; font-size: 0.65rem; font-weight: 800;
                         }
-
-                        .input-filtro-ot {
-                            width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid #E0DCD4;
-                            font-size: 0.8rem; background: #FFFFFF; color: #1D1D1F; outline: none; font-family: 'Roboto', sans-serif;
-                            box-sizing: border-box; transition: border-color 0.2s ease;
-                        }
-                        .input-filtro-ot:focus { border-color: #1E6B4C; }
                     </style>
 
                     <div style="display:flex; flex-direction:column; gap:10px; font-family:'Roboto', sans-serif;">
                         
-                        <!-- SOLAPAS TIPO ARCHIVERO CON COLORES VIVOS -->
                         <div class="tabs-header-archivero-receta">
                             <div class="tab-receta-arch active" data-tab="1" onclick="ModuloOrdenes.m_cambiarTabReceta(1)">
                                 <span>📋 1. DATOS GENERALES</span>
@@ -1423,7 +1357,6 @@ const ModuloOrdenes = {
                                         </select>
                                     </div>
                                     
-                                    <!-- DROP TIPO LABOR CON BOTÓN AGREGAR '+' -->
                                     <div style="grid-column: span 6;">
                                         <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Tipo Labor</label>
                                         <div style="display:flex; gap:6px;">
@@ -1522,9 +1455,6 @@ const ModuloOrdenes = {
         }, 10);
     },
 
-    /* =========================================================================
-     * FUNCIÓN PARA DAR DE ALTA UNA NUEVA LABOR DIRECTO EN SQLite LOCAL (tipos_labores)
-     * ========================================================================= */
     m_modalNuevaLabor: function() {
         const container = document.getElementById('modal-formulario');
         if (!container) return;
@@ -1578,26 +1508,21 @@ const ModuloOrdenes = {
             }
 
             try {
-                // Cálculo seguro Max(id_labor) + 1
                 const resMax = await ModuloOrdenes.m_ejecutarSqlLocal(`SELECT MAX(CAST(id_labor AS INTEGER)) as max_val FROM tipos_labores`);
                 const maxVal = (resMax.data && resMax.data[0] && resMax.data[0].max_val) ? Number(resMax.data[0].max_val) : 0;
                 const nuevoId = maxVal + 1;
 
-                // Inserción en la base SQLite local
                 const sqlInsert = `INSERT INTO tipos_labores (id_labor, rubro, labor, sincronizado) VALUES (?, ?, ?, 0)`;
                 await ModuloOrdenes.m_ejecutarSqlLocal(sqlInsert, [nuevoId, rubro, labor]);
 
-                // Actualizar memoria local en parámetros
                 ModuloOrdenes.parametros.labores.push({
                     id_labor: nuevoId,
                     rubro: rubro,
                     labor: labor
                 });
 
-                // Restaurar formulario original
                 container.innerHTML = contenidoPrevio;
 
-                // Actualizar selector de Rubro si es nuevo
                 const selRubro = document.getElementById('rec_rubro');
                 if (selRubro) {
                     if (![...selRubro.options].some(o => o.value === rubro)) {
@@ -1607,12 +1532,9 @@ const ModuloOrdenes = {
                     }
                 }
 
-                // Filtrar las labores y dejar seleccionada la recién creada
                 ModuloOrdenes.m_filtrarLaboresPorRubro(rubro);
                 const selLabor = document.getElementById('rec_tipo_app');
-                if (selLabor) {
-                    selLabor.value = labor;
-                }
+                if (selLabor) selLabor.value = labor;
 
             } catch (err) {
                 console.error("Error al registrar nueva labor:", err);
@@ -1622,7 +1544,7 @@ const ModuloOrdenes = {
     },
 
     m_cambiarTabReceta: function(numTab) {
-        document.querySelectorAll('.tab-main-archivero').forEach(btn => {
+        document.querySelectorAll('.tab-receta-arch').forEach(btn => {
             btn.classList.toggle('active', Number(btn.getAttribute('data-tab')) === numTab);
         });
         document.querySelectorAll('.tab-panel-receta').forEach(panel => {
@@ -1764,7 +1686,7 @@ const ModuloOrdenes = {
                 <select class="p-insumo input-filtro-ot" onchange="ModuloOrdenes.m_actualizarStockLabel(this); ModuloOrdenes.m_recalcularTodo()">
                     <option value="">Insumo...</option>
                     ${insumosDisponibles.map(i => {
-                        return `<option value="${i.articulo}" data-stock="${i.stock_actual}" data-unidad="${i.unidad}">📦 ${i.articulo.toUpperCase()} (${i.stock_actual} ${i.unidad || 'u'})</option>`;
+                        return `<option value="${i.articulo}" data-cod="${i.cod_articulo || i.reg_local || ''}" data-stock="${i.stock_actual}" data-unidad="${i.unidad}">📦 ${i.articulo.toUpperCase()} (${i.stock_actual} ${i.unidad || 'u'})</option>`;
                     }).join('')}
                 </select>
                 <div class="stock-indicator" style="font-size: 0.63rem; color: #6E6E73; margin-top:2px;">Stock disp: -</div>
@@ -1798,7 +1720,7 @@ const ModuloOrdenes = {
         if (selectInsumo) {
             selectInsumo.innerHTML = `<option value="">Insumo...</option>` + insumosDisponibles.map(i => {
                 const seleccionado = i.articulo.trim().toUpperCase() === valorInsumoActual ? 'selected' : '';
-                return `<option value="${i.articulo}" data-stock="${i.stock_actual}" data-unidad="${i.unidad}" ${seleccionado}>📦 ${i.articulo.toUpperCase()} (${i.stock_actual} ${i.unidad || 'u'})</option>`;
+                return `<option value="${i.articulo}" data-cod="${i.cod_articulo || i.reg_local || ''}" data-stock="${i.stock_actual}" data-unidad="${i.unidad}" ${seleccionado}>📦 ${i.articulo.toUpperCase()} (${i.stock_actual} ${i.unidad || 'u'})</option>`;
             }).join('');
             this.m_actualizarStockLabel(selectInsumo);
         }
@@ -1832,137 +1754,169 @@ const ModuloOrdenes = {
     },
 
     m_guardarReceta: async function(e) {
-    if (e) e.preventDefault();
+        if (e) e.preventDefault();
 
-    const orden_trab_raw = document.getElementById('rec_orden_cab')?.value;
-    const orden_trab = orden_trab_raw ? parseInt(orden_trab_raw, 10) : null;
-    
-    const ref_orden_raw = document.getElementById('rec_ref_orden')?.value;
-    const ref_orden = (ref_orden_raw && ref_orden_raw.trim() !== '') ? parseInt(ref_orden_raw, 10) : null;
+        const orden_trab_raw = document.getElementById('rec_orden_cab')?.value;
+        const orden_trab = orden_trab_raw ? parseInt(orden_trab_raw, 10) : null;
+        
+        const ref_orden_raw = document.getElementById('rec_ref_orden')?.value;
+        const ref_orden = (ref_orden_raw && ref_orden_raw.trim() !== '') ? parseInt(ref_orden_raw, 10) : null;
 
-    const fecha = document.getElementById('rec_fecha')?.value;
-    const estado_ui = document.getElementById('rec_estado')?.value;
-    const estado = (estado_ui && estado_ui.trim() !== "") ? estado_ui : "PENDIENTE";
+        const fecha = document.getElementById('rec_fecha')?.value;
+        const estado_ui = document.getElementById('rec_estado')?.value;
+        const estado = (estado_ui && estado_ui.trim() !== "") ? estado_ui : "PENDIENTE";
 
-    const est = document.getElementById('rec_est')?.value || '';
-    const rubro = (document.getElementById('rec_rubro')?.value || '').toUpperCase();
-    const labor = (document.getElementById('rec_tipo_app')?.value || '').toUpperCase();
-    const cotizacion = parseFloat(document.getElementById('rec_cot')?.value) || 1200;
+        const est = document.getElementById('rec_est')?.value || '';
+        const rubro = (document.getElementById('rec_rubro')?.value || '').toUpperCase();
+        const labor = (document.getElementById('rec_tipo_app')?.value || '').toUpperCase();
+        const cotizacion = parseFloat(document.getElementById('rec_cot')?.value) || 1200;
 
-    const contratista = (document.getElementById('rec_contratista')?.value || '').toUpperCase();
-    const mo_ha = parseFloat(document.getElementById('rec_mo')?.value) || 0;
-    
-    const requiereApoyo = document.getElementById('check_apoyo')?.checked || false;
-    const costo_apoyo_ha = requiereApoyo ? (parseFloat(document.getElementById('rec_costo_apoyo')?.value) || 0) : 0;
-    const ha_apoyo = requiereApoyo ? (parseFloat(document.getElementById('rec_ha_apoyo')?.value) || 0) : 0;
-    const pers_apoyo = requiereApoyo ? (document.getElementById('rec_pers_apoyo')?.value || '') : '';
-    const total_apoyo_global = costo_apoyo_ha * ha_apoyo;
+        const contratista = (document.getElementById('rec_contratista')?.value || '').toUpperCase();
+        const mo_ha = parseFloat(document.getElementById('rec_mo')?.value) || 0;
+        
+        const requiereApoyo = document.getElementById('check_apoyo')?.checked || false;
+        const costo_apoyo_ha = requiereApoyo ? (parseFloat(document.getElementById('rec_costo_apoyo')?.value) || 0) : 0;
+        const ha_apoyo = requiereApoyo ? (parseFloat(document.getElementById('rec_ha_apoyo')?.value) || 0) : 0;
+        const pers_apoyo = requiereApoyo ? (document.getElementById('rec_pers_apoyo')?.value || '') : '';
+        const total_apoyo_global = costo_apoyo_ha * ha_apoyo;
 
-    if (!orden_trab) return this.m_mostrarNotificacion("Ingrese un Número de Orden de Trabajo válido.", "error");
-    if (!fecha || !est || !rubro || !labor) return this.m_mostrarNotificacion("Complete los datos requeridos de cabecera.", "error");
-    if (!this.lotesSeleccionados || this.lotesSeleccionados.length === 0) return this.m_mostrarNotificacion("Debe añadir al menos un lote a la orden.", "error");
+        if (!orden_trab) return this.m_mostrarNotificacion("Ingrese un Número de Orden de Trabajo válido.", "error");
+        if (!fecha || !est || !rubro || !labor) return this.m_mostrarNotificacion("Complete los datos requeridos de cabecera.", "error");
+        if (!this.lotesSeleccionados || this.lotesSeleccionados.length === 0) return this.m_mostrarNotificacion("Debe añadir al menos un lote a la orden.", "error");
 
-    const insumosList = [];
-    document.querySelectorAll('.producto-row').forEach(row => {
-        const insumo = row.querySelector('.p-insumo')?.value;
-        const dosis = parseFloat(row.querySelector('.p-dosis')?.value) || 0;
-        const u_unit = parseFloat(row.querySelector('.p-u-unit')?.value) || 0;
-        const inputDepoRow = row.querySelector('.p-deposito');
-        const deposito_origen_fila = inputDepoRow ? inputDepoRow.value : 'DEB_CENTRAL';
+        const insumosList = [];
+        document.querySelectorAll('.producto-row').forEach(row => {
+            const selectInsumo = row.querySelector('.p-insumo');
+            const insumo = selectInsumo?.value;
+            const dosis = parseFloat(row.querySelector('.p-dosis')?.value) || 0;
+            const u_unit = parseFloat(row.querySelector('.p-u-unit')?.value) || 0;
+            const inputDepoRow = row.querySelector('.p-deposito');
+            const deposito_origen_fila = inputDepoRow ? inputDepoRow.value : 'DEB_CENTRAL';
 
-        if (insumo && dosis > 0) {
-            insumosList.push({ insumo, dosis, u_unit, deposito_origen: deposito_origen_fila });
+            const selectedOpt = selectInsumo?.selectedOptions[0];
+            let codArt = selectedOpt?.getAttribute('data-cod') || '';
+
+            // Convalidación prioritaria contra el Catálogo Maestro de Insumos
+            if (!codArt || codArt === 'null' || codArt === 'undefined') {
+                const matchM = (ModuloOrdenes.parametros.insumosMaestros || []).find(m => 
+                    (m.articulo || '').trim().toUpperCase() === (insumo || '').trim().toUpperCase()
+                );
+                codArt = matchM?.reg_local || null;
+            }
+
+            // Segundo fallback a la lista de insumos de stock
+            if (!codArt) {
+                const matchStock = (ModuloOrdenes.parametros.insumos || []).find(m => 
+                    (m.articulo || '').trim().toUpperCase() === (insumo || '').trim().toUpperCase()
+                );
+                codArt = matchStock?.cod_articulo || matchStock?.reg_local || null;
+            }
+
+            if (insumo && dosis > 0) {
+                insumosList.push({ 
+                    insumo, 
+                    dosis, 
+                    u_unit, 
+                    deposito_origen: deposito_origen_fila, 
+                    cod_articulo: codArt 
+                });
+            }
+        });
+
+        if (insumosList.length === 0) return this.m_mostrarNotificacion("Agregue al menos un insumo con dosis mayor a 0.", "error");
+
+        const btnGuardar = document.getElementById('btn-guardar-despacho-action');
+        if (btnGuardar) {
+            btnGuardar.innerText = "GUARDANDO...";
+            btnGuardar.disabled = true;
         }
-    });
 
-    if (insumosList.length === 0) return this.m_mostrarNotificacion("Agregue al menos un insumo con dosis mayor a 0.", "error");
+        try {
+            const resMaxId = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(id AS INTEGER)) as max_id FROM egresos_insumos`);
+            let currentId = (resMaxId.data && resMaxId.data[0] && resMaxId.data[0].max_id) 
+                ? Number(resMaxId.data[0].max_id) 
+                : 0;
 
-    const btnGuardar = document.getElementById('btn-guardar-despacho-action');
-    if (btnGuardar) {
-        btnGuardar.innerText = "GUARDANDO...";
-        btnGuardar.disabled = true;
-    }
+            const sqlInsert = `
+                INSERT INTO egresos_insumos (
+                    reg_local, id, orden_trab, ref_orden, fecha, estado, establecimiento,
+                    campo, cuadro, sup_uso, tipo_labor, labor, insumo, dosis_ha,
+                    imp_uni, total_consumo, total_dolar, total_pesos, contratista,
+                    costo_ha, apoyo, ha_apoyo, total_apoyo, cotizacion, costo_final,
+                    costo_final_ha_dolar, tabla_origen, deposito_origen, centro_costo,
+                    comentario, cod_articulo, sincronizado
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            `;
 
-    try {
-        // 29 Columnas explícitas (se omite 'id' para autoincremento de SQLite)
-        const sqlInsert = `
-            INSERT INTO egresos_insumos (
-                reg_local, orden_trab, ref_orden, fecha, estado, establecimiento,
-                campo, cuadro, sup_uso, tipo_labor, labor, insumo, dosis_ha,
-                imp_uni, total_consumo, total_dolar, total_pesos, contratista,
-                costo_ha, apoyo, ha_apoyo, total_apoyo, cotizacion, costo_final,
-                costo_final_ha_dolar, tabla_origen, deposito_origen, centro_costo,
-                comentario, sincronizado
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-        `;
+            for (const lote of this.lotesSeleccionados) {
+                const supLote = parseFloat(lote.sup || 0);
 
-        for (const lote of this.lotesSeleccionados) {
-            const supLote = parseFloat(lote.sup || 0);
+                for (const ins of insumosList) {
+                    currentId++;
+                    const total_consumo_fila = parseFloat((supLote * ins.dosis).toFixed(4));
+                    const total_dolar_fila = parseFloat((total_consumo_fila * ins.u_unit).toFixed(4));
+                    const total_pesos_fila = parseFloat((total_dolar_fila * cotizacion).toFixed(4));
 
-            for (const ins of insumosList) {
-                const total_consumo_fila = parseFloat((supLote * ins.dosis).toFixed(4));
-                const total_dolar_fila = parseFloat((total_consumo_fila * ins.u_unit).toFixed(4));
-                const total_pesos_fila = parseFloat((total_dolar_fila * cotizacion).toFixed(4));
+                    const costo_mo_fila = parseFloat((supLote * mo_ha).toFixed(4));
+                    const costo_apoyo_fila = parseFloat((supLote * costo_apoyo_ha).toFixed(4)); 
+                    
+                    const costo_final_fila = parseFloat((total_dolar_fila + costo_mo_fila + costo_apoyo_fila).toFixed(4));
+                    const costo_final_ha_dolar = supLote > 0 ? parseFloat((costo_final_fila / supLote).toFixed(4)) : 0;
+                    const idUnicoFila = this.m_uniqueid('PROD-');
 
-                const costo_mo_fila = parseFloat((supLote * mo_ha).toFixed(4));
-                const costo_apoyo_fila = parseFloat((supLote * costo_apoyo_ha).toFixed(4)); 
-                
-                const costo_final_fila = parseFloat((total_dolar_fila + costo_mo_fila + costo_apoyo_fila).toFixed(4));
-                const costo_final_ha_dolar = supLote > 0 ? parseFloat((costo_final_fila / supLote).toFixed(4)) : 0;
-                const idUnicoFila = this.m_uniqueid('PROD-');
+                    await this.m_ejecutarSqlLocal(sqlInsert, [
+                        idUnicoFila,
+                        currentId,
+                        orden_trab,
+                        ref_orden,
+                        fecha,
+                        estado,
+                        est,
+                        lote.campo_nombre || lote.campo || 'SIN CAMPO',
+                        lote.lote || lote.cuadro || 'SIN CUADRO',
+                        supLote,
+                        rubro,
+                        labor,
+                        ins.insumo,
+                        ins.dosis,
+                        ins.u_unit,
+                        total_consumo_fila,
+                        total_dolar_fila,
+                        total_pesos_fila,
+                        contratista,
+                        mo_ha,
+                        pers_apoyo.toUpperCase(),
+                        ha_apoyo,
+                        parseFloat(total_apoyo_global.toFixed(4)),
+                        cotizacion,
+                        costo_final_fila,
+                        costo_final_ha_dolar,
+                        'ORDEN DE TRABAJO',
+                        ins.deposito_origen,
+                        rubro ? rubro.toUpperCase() : 'GENERAL',
+                        'Fila autogenerada mediante receta técnica.',
+                        ins.cod_articulo || null
+                    ]);
+                }
+            }
 
-                // 29 Parámetros correspondientes
-                await this.m_ejecutarSqlLocal(sqlInsert, [
-                    idUnicoFila,
-                    orden_trab,
-                    ref_orden,
-                    fecha,
-                    estado,
-                    est,
-                    lote.campo_nombre || lote.campo || 'SIN CAMPO',
-                    lote.lote || lote.cuadro || 'SIN CUADRO',
-                    supLote,
-                    rubro,
-                    labor,
-                    ins.insumo,
-                    ins.dosis,
-                    ins.u_unit,
-                    total_consumo_fila,
-                    total_dolar_fila,
-                    total_pesos_fila,
-                    contratista,
-                    mo_ha,
-                    pers_apoyo.toUpperCase(),
-                    ha_apoyo,
-                    parseFloat(total_apoyo_global.toFixed(4)),
-                    cotizacion,
-                    costo_final_fila,
-                    costo_final_ha_dolar,
-                    'ORDEN DE TRABAJO',
-                    ins.deposito_origen,
-                    rubro ? rubro.toUpperCase() : 'GENERAL',
-                    'Fila autogenerada mediante receta técnica.'
-                ]);
+            this.m_mostrarNotificacion("¡Receta guardada exitosamente en base local!", "exito");
+            
+            const modalBox = document.getElementById('modal-agrosoft');
+            if (modalBox) modalBox.style.display = 'none';
+            
+            await this.m_inicializar(); 
+
+        } catch (err) {
+            console.error("❌ Error al guardar receta local:", err);
+            this.m_mostrarNotificacion("Error al guardar la orden local: " + err.message, "error");
+        } finally {
+            if (btnGuardar) {
+                btnGuardar.innerText = "GUARDAR RECETA";
+                btnGuardar.disabled = false;
             }
         }
-
-        this.m_mostrarNotificacion("¡Receta guardada exitosamente en base local!", "exito");
-        
-        const modalBox = document.getElementById('modal-agrosoft');
-        if (modalBox) modalBox.style.display = 'none';
-        
-        await this.m_inicializar(); 
-
-    } catch (err) {
-        console.error("❌ Error al guardar receta local:", err);
-        this.m_mostrarNotificacion("Error al guardar la orden local: " + err.message, "error");
-    } finally {
-        if (btnGuardar) {
-            btnGuardar.innerText = "GUARDAR RECETA";
-            btnGuardar.disabled = false;
-        }
-    }
-},
+    },
         
     m_uniqueid: function(prefix = '') {
         const timestamp = Date.now().toString(36); 
@@ -2133,9 +2087,9 @@ const ModuloOrdenes = {
         const registros = this.parametros.ordenes.filter(o => String(o.orden_trab) === String(ot) && (o.ref_orden || 'SIN-REF').toString() === ref.toString());
         if (registros.length === 0) return;
 
-        let csv = "\uFEFFCUADRO;INSUMO;DOSIS_HA;CONSUMO_TOTAL;COSTO_USD\n";
+        let csv = "\uFEFFCUADRO;COD_ARTICULO;INSUMO;DOSIS_HA;CONSUMO_TOTAL;COSTO_USD\n";
         registros.forEach(r => {
-            csv += `"${r.cuadro}";"${r.insumo}";${r.dosis_ha};${r.total_consumo};${r.total_dolar}\n`;
+            csv += `"${r.cuadro}";"${r.cod_articulo || ''}";"${r.insumo}";${r.dosis_ha};${r.total_consumo};${r.total_dolar}\n`;
         });
 
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -2179,6 +2133,7 @@ const ModuloOrdenes = {
                     <thead>
                         <tr>
                             <th>LOTE / CUADRO</th>
+                            <th>CÓDIGO</th>
                             <th>INSUMO</th>
                             <th style="text-align:center;">DOSIS/HA</th>
                             <th style="text-align:right;">CONSUMO TOTAL</th>
@@ -2189,6 +2144,7 @@ const ModuloOrdenes = {
                         ${registros.map(r => `
                             <tr>
                                 <td>Lote ${r.cuadro} (${r.sup_uso} Ha)</td>
+                                <td><code>${r.cod_articulo || '-'}</code></td>
                                 <td><b>🌱 ${r.insumo}</b></td>
                                 <td align="center">${parseFloat(r.dosis_ha).toFixed(2)}</td>
                                 <td align="right">${parseFloat(r.total_consumo).toFixed(1)}</td>

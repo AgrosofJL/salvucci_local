@@ -1139,12 +1139,18 @@ const ModuloCombustible = {
             const maxOrden = (resMaxE.data && resMaxE.data[0] && resMaxE.data[0].max_ot) ? Number(resMaxE.data[0].max_ot) : 0;
             const nuevaOT = String(maxOrden + 1);
 
+            // Buscar si existe el insumo en memoria de insumosComb
+            const matchComb = (this.parametros.insumosComb || []).find(i => 
+                (i.articulo || '').trim().toUpperCase() === tipo.trim().toUpperCase()
+            );
+            const codArticuloComb = matchComb?.reg_local || null;
+
             const sqlEgresos = `
                 INSERT INTO egresos_insumos (
                     reg_local, tabla_origen, orden_trab, fecha, deposito_origen, insumo, 
                     establecimiento, campo, labor, tipo_labor, cuadro, sup_uso, total_consumo, 
-                    imp_uni, total_dolar, total_pesos, centro_costo, comentario, estado, id, sincronizado
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                    imp_uni, total_dolar, total_pesos, centro_costo, comentario, estado, id, cod_articulo, sincronizado
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 ON CONFLICT(reg_local, id) DO UPDATE SET
                     fecha=excluded.fecha,
                     deposito_origen=excluded.deposito_origen,
@@ -1162,9 +1168,34 @@ const ModuloCombustible = {
                     centro_costo=excluded.centro_costo,
                     comentario=excluded.comentario,
                     estado='Activo',
+                    cod_articulo=excluded.cod_articulo,
                     sincronizado=0
             `;
 
+            await this.m_ejecutarSqlLocal(sqlEgresos, [
+                String(regLocalNumeric),
+                "COMBUSTIBLE",
+                nuevaOT,
+                fecha,
+                campo,
+                tipo,
+                campo,
+                campo,
+                labor,
+                labor,
+                (lote && lote.trim() !== "" && lote !== "0") ? lote : "Sin Cuadro",
+                parseFloat(sup) || 0,
+                cant,
+                p_u,
+                totalDolar,
+                totalPesos,
+                (centroCosto && centroCosto.trim() !== "") ? centroCosto.toUpperCase() : "COMBUSTIBLE",
+                `Operario: ${operario}`,
+                'Activo',
+                regLocalNumeric,
+                codArticuloComb
+            ]);
+            
             await this.m_ejecutarSqlLocal(sqlEgresos, [
                 String(regLocalNumeric),
                 "COMBUSTIBLE",

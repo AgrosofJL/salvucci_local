@@ -819,12 +819,19 @@ const ModuloLabores = {
         const finalRegLocal = "REG-LABORES-" + Date.now();
 
         // Obtener la orden de trabajo máxima directamente desde la base de datos
+        // Obtener la orden de trabajo máxima directamente desde la base de datos
+        // Obtener tanto max_ot como max_id
         const resMax = await this.m_ejecutarSqlLocal(`
-            SELECT MAX(CAST(orden_trab AS INTEGER)) AS max_ot FROM egresos_insumos
+            SELECT 
+                MAX(CAST(orden_trab AS INTEGER)) AS max_ot,
+                MAX(CAST(id AS INTEGER)) AS max_id
+            FROM egresos_insumos
         `);
         const rowMax = (resMax.data && resMax.data[0]) || (resMax[0]) || {};
         const maxOrdenTrab = parseInt(rowMax.max_ot, 10) || 0;
+        const maxId = parseInt(rowMax.max_id, 10) || 0;
         const nuevaOrdenTrab = maxOrdenTrab + 1;
+        const nuevoIdLabor = maxId + 1;
 
         const precio = parseFloat(document.getElementById('l_precio')?.value) || 0;
         const cantidad = parseFloat(document.getElementById('l_cant')?.value) || 0;
@@ -849,6 +856,7 @@ const ModuloLabores = {
         const sqlInsert = `
             INSERT INTO egresos_insumos (
                 reg_local, 
+                id,
                 tabla_origen, 
                 orden_trab, 
                 ref_orden, 
@@ -870,13 +878,14 @@ const ModuloLabores = {
                 deposito_origen, 
                 comentario, 
                 estado, 
+                cod_articulo,
                 sincronizado
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
         `;
 
-        // 23 Parámetros correspondientes
         const paramsInsert = [
             finalRegLocal,
+            nuevoIdLabor,
             'LABOR',
             nuevaOrdenTrab,
             0,

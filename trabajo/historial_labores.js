@@ -104,6 +104,7 @@ const ModuloHistorialLabores = {
             labor: r.labor || r.tipo_labor || 'Labor Agrícola',
             tipo_labor: r.tipo_labor || 'General',
             insumo: r.insumo || 'Sin insumo directo',
+            cod_articulo: r.cod_articulo || '', // <-- ACA ES LO NUEVO
             contratista: r.contratista || 'Personal Propio',
             sup_uso: Number(r.sup_uso) || 0,
             dosis_ha: Number(r.dosis_ha) || 0,

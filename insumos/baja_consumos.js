@@ -48,18 +48,21 @@ const PaginaBajaInsumos = {
         visor.innerHTML = '<div class="loader-apple" style="font-family:\'Roboto\', sans-serif; text-align:center; padding:40px; color:#0071E3; font-weight:500;">Calculando balances de stock físico en depósitos (Base Local)...</div>';
 
         try {
-            const [resIngresos, resEgresos, resCampos] = await Promise.all([
+            const [resIngresos, resEgresos, resCampos, resIns] = await Promise.all([
                 this.m_ejecutarSqlLocal(`SELECT * FROM insumos_ingresos`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM egresos_insumos WHERE LOWER(estado) = 'activo' OR estado IS NULL`),
-                this.m_ejecutarSqlLocal(`SELECT * FROM campos ORDER BY establecimiento ASC`)
+                this.m_ejecutarSqlLocal(`SELECT * FROM campos ORDER BY establecimiento ASC`),
+                this.m_ejecutarSqlLocal(`SELECT reg_local, articulo FROM insumos`)
             ]);
+
+            this.parametros.campos = resCampos.data || resCampos || [];
+            this.parametros.insumosMaestros = resIns.data || resIns || [];
 
             const datosIngresos = resIngresos.data || resIngresos || [];
             const datosEgresos = resEgresos.data || resEgresos || [];
             const datosCampos = resCampos.data || resCampos || [];
 
-            this.parametros.campos = datosCampos;
-            
+          
             this.m_procesarStock(datosIngresos, datosEgresos);
             this.m_dibujarVistaPrincipal();
 
@@ -71,19 +74,33 @@ const PaginaBajaInsumos = {
 
     m_procesarStock: function(ingresos, egresos) {
         const balance = {};
+        const mapaMaestro = new Map();
+        (this.parametros.insumosMaestros || []).forEach(m => {
+            if (m.articulo) mapaMaestro.set(m.articulo.trim().toUpperCase(), m.reg_local);
+        });
 
         ingresos.forEach(i => {
-            const artKey = i.articulo ? i.articulo.trim().toUpperCase() : 'SIN NOMBRE';
-            if (!balance[artKey]) {
-                balance[artKey] = { articulo: artKey, unidad: i.unidad || 'U', ingresos: 0, egresos: 0 };
+            const artNombre = (i.articulo || 'SIN NOMBRE').trim().toUpperCase();
+            const codKey = i.cod_articulo || mapaMaestro.get(artNombre) || artNombre;
+
+            if (!balance[codKey]) {
+                balance[codKey] = { 
+                    cod_articulo: codKey,
+                    articulo: i.articulo || artNombre, 
+                    unidad: i.unidad || 'U', 
+                    ingresos: 0, 
+                    egresos: 0 
+                };
             }
-            balance[artKey].ingresos += parseFloat(i.total || i.cant || 0);
+            balance[codKey].ingresos += parseFloat(i.total || i.cant || 0);
         });
 
         egresos.forEach(e => {
-            const artKey = e.insumo ? e.insumo.trim().toUpperCase() : '';
-            if (artKey && balance[artKey]) {
-                balance[artKey].egresos += parseFloat(e.sup_uso || e.total_consumo || 0);
+            const artNombre = (e.insumo || '').trim().toUpperCase();
+            const codKey = e.cod_articulo || mapaMaestro.get(artNombre) || artNombre;
+
+            if (codKey && balance[codKey]) {
+                balance[codKey].egresos += parseFloat(e.sup_uso || e.total_consumo || 0);
             }
         });
 
@@ -375,13 +392,17 @@ const PaginaBajaInsumos = {
         // Generación dinámica de reg_local con Prefijo + Timestamp
         const finalRegLocal = "REG-BAJA-" + Date.now();
 
-        // Inserción local en SQLite con sincronizado = 0 y estado Activo
+        const maestro = (this.parametros.insumosMaestros || []).find(m => 
+            (m.articulo || '').trim().toUpperCase() === articulo.trim().toUpperCase()
+        );
+        const codArt = maestro?.reg_local || null;
+
         const sqlInsert = `
             INSERT INTO egresos_insumos (
                 reg_local, tabla_origen, tipo_labor, fecha, insumo, 
                 establecimiento, cuadro, sup_uso, total_consumo, imp_uni, 
-                total_dolar, comentario, centro_costo, estado, sincronizado
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                total_dolar, comentario, centro_costo, estado, cod_articulo, sincronizado
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         `;
 
         const paramsInsert = [
@@ -399,7 +420,7 @@ const PaginaBajaInsumos = {
             `Ajuste por Baja: ${comentario}`,
             'BAJA DE STOCK AUTOMÁTICA',
             'ACTIVO',
-            0
+            codArt
         ];
 
         await this.m_ejecutarSqlLocal(sqlInsert, paramsInsert);

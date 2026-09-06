@@ -2,10 +2,9 @@
  * stock_insumos.js - Auditoría y Consolidación de Stock Físico
  * Sistema: SALVUCCI / AgroSoft J&L
  * Lógica: SUM(insumos_ingresos.total) - SUM(egresos_insumos.total_consumo WHERE estado = 'ACTIVO')
- * Matching: TRIM(UPPER(insumos_ingresos.articulo)) === TRIM(UPPER(egresos_insumos.insumo))
+ * Matching prioritario: cod_articulo (con fallback por nombre)
  */
 
-// Helper universal de normalización de cadenas (elimina espacios múltiples y pasa a mayúsculas)
 const _normalizarTextoStock = (txt) => (txt || '').toString().replace(/\s+/g, ' ').trim().toUpperCase();
 
 const ModuloStockInsumos = {
@@ -16,7 +15,7 @@ const ModuloStockInsumos = {
     filtroDeposito: 'TODO',
     filtroTipo: 'TODO',
     textoBusqueda: '',
-    vistaActualTab: 'TODOS', // 'TODOS' | 'ALERTAS' | 'SIN_CATEGORIA'
+    vistaActualTab: 'TODOS',
     
     parametros: {
         cuadros: [],
@@ -40,7 +39,7 @@ const ModuloStockInsumos = {
                 <div id="modal-agrosoft" class="modal-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(18, 22, 28, 0.48); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); z-index: 99999; justify-content: center; align-items: center; padding: 20px; box-sizing: border-box;">
                     <div class="modal-apple-content" style="background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 14px; padding: 24px; width: 95%; max-width: 780px; max-height: 90vh; color: #1D1D1F; box-shadow: 0 10px 25px rgba(0,0,0,0.15); display: flex; flex-direction: column; position: relative;">
                         <div class="modal-header-apple" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #E0DCD4; padding-bottom: 12px; flex-shrink: 0;">
-                            <h3 id="modal-titulo" style="margin: 0; font-size: 1.15rem; font-weight: 800; font-family: 'Roboto', sans-serif; color: #123F2C; letter-spacing: -0.3px;">GESTIÓN DE STOCK</h3>
+                            <h3 id="modal-titulo" style="margin: 0; font-size: 1.15rem; font-weight: 800; font-family: 'Franklin Gothic Book', sans-serif; color: #123F2C; letter-spacing: -0.3px;">GESTIÓN DE STOCK</h3>
                             <button onclick="ModuloStockInsumos.m_cerrarModal()" style="background: none; border: none; color: #6E6E73; font-size: 1.5rem; font-weight:bold; cursor: pointer;">&times;</button>
                         </div>
                         <div id="modal-formulario" style="max-height: 72vh; overflow-y: auto; padding-right: 4px;"></div>
@@ -53,8 +52,6 @@ const ModuloStockInsumos = {
     m_cerrarModal: function() {
         const modal = document.getElementById('modal-agrosoft');
         if (modal) modal.style.display = 'none';
-        const modalContent = document.querySelector('.modal-apple-content');
-        if (modalContent) modalContent.style.maxWidth = '780px';
     },
 
     m_notificarAlerta: function(mensaje, tipo = 'exito') {
@@ -62,7 +59,7 @@ const ModuloStockInsumos = {
         const icono = tipo === 'exito' ? '✅' : tipo === 'error' ? '❌' : '📦';
 
         const toastHTML = `
-            <div id="apple-toast-premium" style="position: fixed; top: 30px; left: 50%; transform: translateX(-50%); background: #FFFFFF; border-left: 4px solid ${colorBorde}; border-top: 1px solid #E0DCD4; border-bottom: 1px solid #E0DCD4; border-right: 1px solid #E0DCD4; border-radius: 14px; padding: 12px 22px; display: flex; align-items: center; gap: 12px; color: #1D1D1F; font-family: 'Roboto', sans-serif; font-size: 0.85rem; font-weight: 600; box-shadow: 0 6px 16px rgba(20,26,36,0.12); z-index: 100000;">
+            <div id="apple-toast-premium" style="position: fixed; top: 30px; left: 50%; transform: translateX(-50%); background: #FFFFFF; border-left: 4px solid ${colorBorde}; border-top: 1px solid #E0DCD4; border-bottom: 1px solid #E0DCD4; border-right: 1px solid #E0DCD4; border-radius: 14px; padding: 12px 22px; display: flex; align-items: center; gap: 12px; color: #1D1D1F; font-family: 'Franklin Gothic Book', sans-serif; font-size: 0.85rem; font-weight: 600; box-shadow: 0 6px 16px rgba(20,26,36,0.12); z-index: 100000;">
                 <span style="font-size: 1.1rem;">${icono}</span>
                 <div>${mensaje}</div>
             </div>
@@ -84,7 +81,7 @@ const ModuloStockInsumos = {
     m_inicializar: async function() {
         const visor = document.getElementById('pantalla-dinamica');
         if (!visor) return;
-        visor.innerHTML = `<div class="loader-apple" style="font-family:'Roboto', sans-serif; text-align:center; padding:50px; color:#1E6B4C; font-weight:500; letter-spacing: 0.3px;">Consolidando entradas de ingresos y egresos de campo...</div>`;
+        visor.innerHTML = `<div class="loader-apple" style="font-family:'Franklin Gothic Book', sans-serif; text-align:center; padding:50px; color:#1E6B4C; font-weight:500;">Consolidando inventario y stock físico...</div>`;
 
         try {
             const [resDep, resCuadros, resGastos, resIng, resEgr, resIns] = await Promise.all([
@@ -113,75 +110,78 @@ const ModuloStockInsumos = {
             this.m_dibujarEstructura();
         } catch (err) {
             console.error("❌ Error en Inicialización de Stock:", err);
-            visor.innerHTML = `<div style="color:#E0342A; padding:20px; font-family:'Roboto'; font-weight: 500;">Error al procesar el stock local: ${err.message}</div>`;
+            visor.innerHTML = `<div style="color:#E0342A; padding:20px; font-family:'Franklin Gothic Book'; font-weight: 500;">Error al procesar el stock local: ${err.message}</div>`;
         }
     },
 
     m_procesarStockGlobal: function() {
-    const consolidado = {};
-    const mapaMaestro = new Map();
+        const consolidado = {};
+        const mapaMaestro = new Map();
 
-    // Mapeo del catálogo maestro para tomar Rubro y Sub-Rubro
-    (this.datosOriginales.insumosMaestros || []).forEach(m => {
-        const k = (m.articulo || '').trim().toUpperCase();
-        if (k) mapaMaestro.set(k, m);
-    });
+        (this.datosOriginales.insumosMaestros || []).forEach(m => {
+            if (m.reg_local) mapaMaestro.set(String(m.reg_local).trim(), m);
+            if (m.articulo) mapaMaestro.set(m.articulo.trim().toUpperCase(), m);
+        });
 
-    // 1. Entradas desde insumos_ingresos
-    (this.datosOriginales.ingresos || []).forEach(i => {
-        const artKey = (i.articulo || "SIN ARTICULO").trim().toUpperCase();
-        if (!consolidado[artKey]) {
-            const maestro = mapaMaestro.get(artKey);
-            consolidado[artKey] = { 
-                reg_local_maestro: maestro?.reg_local || null,
-                articulo: i.articulo, 
-                rubro: (maestro?.rubro || i.descripcion || "GENERAL").trim().toUpperCase(),
-                sub_rubro: (maestro?.sub_rubro || "").trim().toUpperCase(),
-                descripcion: (maestro?.descripcion || i.descripcion || "GENERAL").trim().toUpperCase(), 
-                tipo_insumos: (i.tipo_insumo || "GENERAL").trim().toUpperCase(),
-                entradas: 0, 
-                salidas: 0, 
-                unidad: maestro?.unidad_medida || i.unidad || 'LITROS' 
+        // 1. Entradas (insumos_ingresos)
+        (this.datosOriginales.ingresos || []).forEach(i => {
+            const codDirecto = (i.cod_articulo || '').trim();
+            const artNombre = (i.articulo || "SIN ARTICULO").trim().toUpperCase();
+            const maestro = (codDirecto && mapaMaestro.get(codDirecto)) || mapaMaestro.get(artNombre);
+            const claveUnica = maestro?.reg_local || codDirecto || artNombre;
+
+            if (!consolidado[claveUnica]) {
+                consolidado[claveUnica] = { 
+                    cod_articulo: maestro?.reg_local || codDirecto || null,
+                    reg_local_maestro: maestro?.reg_local || codDirecto || null,
+                    articulo: maestro?.articulo || i.articulo, 
+                    rubro: (maestro?.rubro || i.tipo_insumo || i.descripcion || "GENERAL").trim().toUpperCase(),
+                    sub_rubro: (maestro?.sub_rubro || i.tipo_insumo || "").trim().toUpperCase(),
+                    descripcion: (maestro?.descripcion || i.descripcion || "GENERAL").trim().toUpperCase(), 
+                    entradas: 0, 
+                    salidas: 0, 
+                    unidad: maestro?.unidad_medida || i.unidad || 'LITROS' 
+                };
+            }
+            consolidado[claveUnica].entradas += Number(i.total || i.cant) || 0;
+        });
+
+        // 2. Salidas (egresos_insumos)
+        (this.datosOriginales.egresos || []).forEach(e => {
+            if (e.estado && e.estado.trim().toUpperCase() === 'CANCELADO') return;
+
+            const codDirecto = (e.cod_articulo || '').trim();
+            const artNombre = (e.insumo || "SIN ARTICULO").trim().toUpperCase();
+            const maestro = (codDirecto && mapaMaestro.get(codDirecto)) || mapaMaestro.get(artNombre);
+            const claveUnica = maestro?.reg_local || codDirecto || artNombre;
+
+            if (!consolidado[claveUnica]) {
+                consolidado[claveUnica] = { 
+                    cod_articulo: maestro?.reg_local || codDirecto || null,
+                    reg_local_maestro: maestro?.reg_local || codDirecto || null,
+                    articulo: maestro?.articulo || e.insumo, 
+                    rubro: (maestro?.rubro || "GENERAL").trim().toUpperCase(),
+                    sub_rubro: (maestro?.sub_rubro || "").trim().toUpperCase(),
+                    descripcion: (maestro?.descripcion || "GENERAL").trim().toUpperCase(), 
+                    entradas: 0, 
+                    salidas: 0, 
+                    unidad: maestro?.unidad_medida || 'LITROS' 
+                };
+            }
+            consolidado[claveUnica].salidas += Number(e.total_consumo) || 0;
+        });
+
+        // 3. Balance neto final
+        this.datosStock = Object.values(consolidado).map(s => {
+            const sinRubro = !s.rubro || s.rubro === '0' || s.rubro === 'SIN ASIGNAR' || s.rubro === 'GENERAL';
+            const sinSubRubro = !s.sub_rubro || s.sub_rubro === '0' || s.sub_rubro === 'SIN ASIGNAR';
+            return {
+                ...s,
+                stock_actual: s.entradas - s.salidas,
+                estaIncompleto: sinRubro && sinSubRubro
             };
-        }
-        consolidado[artKey].entradas += Number(i.total) || 0;
-        if (i.descripcion && consolidado[artKey].descripcion === "GENERAL") {
-            consolidado[artKey].descripcion = i.descripcion.trim().toUpperCase();
-        }
-    });
-
-    // 2. Salidas directas desde egresos_insumos
-    (this.datosOriginales.egresos || []).forEach(e => {
-        const artKey = (e.insumo || "SIN ARTICULO").trim().toUpperCase();
-        if (!consolidado[artKey]) {
-            const maestro = mapaMaestro.get(artKey);
-            consolidado[artKey] = { 
-                reg_local_maestro: maestro?.reg_local || null,
-                articulo: e.insumo, 
-                rubro: (maestro?.rubro || "GENERAL").trim().toUpperCase(),
-                sub_rubro: (maestro?.sub_rubro || "").trim().toUpperCase(),
-                descripcion: (maestro?.descripcion || e.comentario || "GENERAL").trim().toUpperCase(), 
-                tipo_insumos: (e.tipo_labor || "GENERAL").trim().toUpperCase(), 
-                entradas: 0, 
-                salidas: 0, 
-                unidad: maestro?.unidad_medida || 'LITROS' 
-            };
-        }
-        // Suma directa de consumo sin trabas de condición
-        consolidado[artKey].salidas += Number(e.total_consumo) || 0;
-    });
-
-    // 3. Balance neto
-    this.datosStock = Object.values(consolidado).map(s => {
-        const sinRubro = !s.rubro || s.rubro === '0' || s.rubro === 'SIN ASIGNAR';
-        const sinSubRubro = !s.sub_rubro || s.sub_rubro === '0' || s.sub_rubro === 'SIN ASIGNAR';
-        return {
-            ...s,
-            stock_actual: s.entradas - s.salidas,
-            estaIncompleto: sinRubro && sinSubRubro
-        };
-    }).filter(x => x.entradas > 0 || x.salidas > 0).sort((a, b) => a.articulo.localeCompare(b.articulo));
-},
+        }).filter(x => x.entradas > 0 || x.salidas > 0).sort((a, b) => a.articulo.localeCompare(b.articulo));
+    },
 
     m_cambiarTabVista: function(vista) {
         this.vistaActualTab = vista;
@@ -189,95 +189,103 @@ const ModuloStockInsumos = {
     },
 
     m_obtenerStockFiltrado: function() {
-    let datasetBase = [];
+        let datasetBase = [];
 
-    if (this.filtroDeposito === 'TODO') {
-        datasetBase = JSON.parse(JSON.stringify(this.datosStock));
-    } else {
-        const consolidadoPorDepo = {};
-        const mapaMaestro = new Map();
-        const depoSel = this.filtroDeposito.trim().toUpperCase();
+        if (this.filtroDeposito === 'TODO') {
+            datasetBase = JSON.parse(JSON.stringify(this.datosStock));
+        } else {
+            const consolidadoPorDepo = {};
+            const mapaMaestro = new Map();
+            const depoSel = this.filtroDeposito.trim().toUpperCase();
 
-        (this.datosOriginales.insumosMaestros || []).forEach(m => {
-            const k = (m.articulo || '').trim().toUpperCase();
-            if (k) mapaMaestro.set(k, m);
-        });
-        
-        // Entradas del depósito
-        (this.datosOriginales.ingresos || [])
-            .filter(x => (x.campo_depo || '').trim().toUpperCase() === depoSel)
-            .forEach(i => {
-                const artKey = (i.articulo || "SIN ARTICULO").trim().toUpperCase();
-                const maestro = mapaMaestro.get(artKey);
-
-                if (!consolidadoPorDepo[artKey]) {
-                    consolidadoPorDepo[artKey] = { 
-                        reg_local_maestro: maestro?.reg_local || null,
-                        articulo: i.articulo, 
-                        rubro: (maestro?.rubro || i.descripcion || "GENERAL").trim().toUpperCase(),
-                        sub_rubro: (maestro?.sub_rubro || "").trim().toUpperCase(),
-                        descripcion: (maestro?.descripcion || i.descripcion || "GENERAL").trim().toUpperCase(), 
-                        entradas: 0, 
-                        salidas: 0, 
-                        unidad: maestro?.unidad_medida || i.unidad || 'LITROS' 
-                    };
-                }
-                consolidadoPorDepo[artKey].entradas += Number(i.total) || 0;
+            (this.datosOriginales.insumosMaestros || []).forEach(m => {
+                if (m.reg_local) mapaMaestro.set(String(m.reg_local).trim(), m);
+                if (m.articulo) mapaMaestro.set(m.articulo.trim().toUpperCase(), m);
             });
+            
+            // Entradas del depósito
+            (this.datosOriginales.ingresos || [])
+                .filter(x => (x.campo_depo || '').trim().toUpperCase() === depoSel)
+                .forEach(i => {
+                    const codKey = (i.cod_articulo || '').trim();
+                    const artNombre = (i.articulo || "SIN ARTICULO").trim().toUpperCase();
+                    const maestro = (codKey && mapaMaestro.get(codKey)) || mapaMaestro.get(artNombre);
+                    const artKey = maestro?.reg_local || codKey || artNombre;
 
-        // Consumos del depósito
-        (this.datosOriginales.egresos || [])
-            .filter(x => (x.deposito_origen || '').trim().toUpperCase() === depoSel)
-            .forEach(e => {
-                const artKey = (e.insumo || "SIN ARTICULO").trim().toUpperCase();
-                const maestro = mapaMaestro.get(artKey);
+                    if (!consolidadoPorDepo[artKey]) {
+                        consolidadoPorDepo[artKey] = { 
+                            cod_articulo: maestro?.reg_local || codKey || null,
+                            reg_local_maestro: maestro?.reg_local || codKey || null,
+                            articulo: maestro?.articulo || i.articulo, 
+                            rubro: (maestro?.rubro || i.tipo_insumo || i.descripcion || "GENERAL").trim().toUpperCase(),
+                            sub_rubro: (maestro?.sub_rubro || i.tipo_insumo || "").trim().toUpperCase(),
+                            descripcion: (maestro?.descripcion || i.descripcion || "GENERAL").trim().toUpperCase(), 
+                            entradas: 0, 
+                            salidas: 0, 
+                            unidad: maestro?.unidad_medida || i.unidad || 'LITROS' 
+                        };
+                    }
+                    consolidadoPorDepo[artKey].entradas += Number(i.total || i.cant) || 0;
+                });
 
-                if (!consolidadoPorDepo[artKey]) {
-                    consolidadoPorDepo[artKey] = { 
-                        reg_local_maestro: maestro?.reg_local || null,
-                        articulo: e.insumo, 
-                        rubro: (maestro?.rubro || "GENERAL").trim().toUpperCase(),
-                        sub_rubro: (maestro?.sub_rubro || "").trim().toUpperCase(),
-                        descripcion: (maestro?.descripcion || e.comentario || "GENERAL").trim().toUpperCase(), 
-                        entradas: 0, 
-                        salidas: 0, 
-                        unidad: maestro?.unidad_medida || 'LITROS' 
-                    };
-                }
-                consolidadoPorDepo[artKey].salidas += Number(e.total_consumo) || 0;
-            });
+            // Salidas del depósito
+            (this.datosOriginales.egresos || [])
+                .filter(x => (x.deposito_origen || '').trim().toUpperCase() === depoSel)
+                .forEach(e => {
+                    if (e.estado && e.estado.trim().toUpperCase() === 'CANCELADO') return;
 
-        datasetBase = Object.values(consolidadoPorDepo)
-            .filter(x => x.entradas > 0 || x.salidas > 0)
-            .map(s => ({
-                ...s,
-                stock_actual: s.entradas - s.salidas,
-                estaIncompleto: !s.rubro || s.rubro === 'SIN ASIGNAR'
-            }));
-    }
+                    const codKey = (e.cod_articulo || '').trim();
+                    const artNombre = (e.insumo || "SIN ARTICULO").trim().toUpperCase();
+                    const maestro = (codKey && mapaMaestro.get(codKey)) || mapaMaestro.get(artNombre);
+                    const artKey = maestro?.reg_local || codKey || artNombre;
 
-    if (this.filtroTipo !== 'TODO') {
-        datasetBase = datasetBase.filter(s => s.rubro === this.filtroTipo.toUpperCase() || s.sub_rubro === this.filtroTipo.toUpperCase());
-    }
+                    if (!consolidadoPorDepo[artKey]) {
+                        consolidadoPorDepo[artKey] = { 
+                            cod_articulo: maestro?.reg_local || codKey || null,
+                            reg_local_maestro: maestro?.reg_local || codKey || null,
+                            articulo: maestro?.articulo || e.insumo, 
+                            rubro: (maestro?.rubro || "GENERAL").trim().toUpperCase(),
+                            sub_rubro: (maestro?.sub_rubro || "").trim().toUpperCase(),
+                            descripcion: (maestro?.descripcion || "GENERAL").trim().toUpperCase(), 
+                            entradas: 0, 
+                            salidas: 0, 
+                            unidad: maestro?.unidad_medida || 'LITROS' 
+                        };
+                    }
+                    consolidadoPorDepo[artKey].salidas += Number(e.total_consumo) || 0;
+                });
 
-    if (this.textoBusqueda) {
-        const v = this.textoBusqueda.toLowerCase();
-        datasetBase = datasetBase.filter(s => 
-            s.articulo.toLowerCase().includes(v) || 
-            s.rubro.toLowerCase().includes(v) ||
-            s.sub_rubro.toLowerCase().includes(v) ||
-            s.descripcion.toLowerCase().includes(v)
-        );
-    }
+            datasetBase = Object.values(consolidadoPorDepo)
+                .filter(x => x.entradas > 0 || x.salidas > 0)
+                .map(s => ({
+                    ...s,
+                    stock_actual: s.entradas - s.salidas,
+                    estaIncompleto: !s.rubro || s.rubro === 'SIN ASIGNAR'
+                }));
+        }
 
-    if (this.vistaActualTab === 'ALERTAS') {
-        datasetBase = datasetBase.filter(x => x.stock_actual <= 0);
-    } else if (this.vistaActualTab === 'SIN_CATEGORIA') {
-        datasetBase = datasetBase.filter(x => x.estaIncompleto);
-    }
+        if (this.filtroTipo !== 'TODO') {
+            datasetBase = datasetBase.filter(s => s.rubro === this.filtroTipo.toUpperCase() || s.sub_rubro === this.filtroTipo.toUpperCase());
+        }
 
-    return datasetBase;
-},
+        if (this.textoBusqueda) {
+            const v = this.textoBusqueda.toLowerCase();
+            datasetBase = datasetBase.filter(s => 
+                s.articulo.toLowerCase().includes(v) || 
+                (s.cod_articulo && s.cod_articulo.toLowerCase().includes(v)) ||
+                s.rubro.toLowerCase().includes(v) ||
+                s.sub_rubro.toLowerCase().includes(v)
+            );
+        }
+
+        if (this.vistaActualTab === 'ALERTAS') {
+            datasetBase = datasetBase.filter(x => x.stock_actual <= 0);
+        } else if (this.vistaActualTab === 'SIN_CATEGORIA') {
+            datasetBase = datasetBase.filter(x => x.estaIncompleto);
+        }
+
+        return datasetBase;
+    },
 
     m_dibujarEstructura: function() {
         const visor = document.getElementById('pantalla-dinamica');
@@ -288,7 +296,10 @@ const ModuloStockInsumos = {
         const totalIncompletos = this.datosStock.filter(x => x.estaIncompleto).length;
 
         const rubrosUnicos = [...new Set(this.datosStock.map(s => s.rubro).filter(r => r && r !== '0' && r !== 'SIN ASIGNAR'))].sort();
-        const depositosDisponibles = [...new Set(this.datosOriginales.ingresos.map(i => _normalizarTextoStock(i.campo_depo)).filter(Boolean))].sort();
+        const depositosDisponibles = [...new Set([
+            ...this.datosOriginales.ingresos.map(i => _normalizarTextoStock(i.campo_depo)),
+            ...this.datosOriginales.egresos.map(e => _normalizarTextoStock(e.deposito_origen))
+        ].filter(Boolean))].sort();
 
         visor.innerHTML = `
             <style>
@@ -301,22 +312,35 @@ const ModuloStockInsumos = {
                     --color-plant: #1E6B4C;
                     --color-plant-dark: #123F2C;
                     --color-plant-soft: rgba(30, 107, 76, 0.10);
+                    --radius-lg: 16px;
+                    --radius-md: 12px;
                 }
 
-                .stock-ins-layout { font-family: 'Roboto', sans-serif; color: #1D1D1F; padding: 8px 18px 25px 18px; }
+                .stock-ins-layout { 
+                    font-family: 'Franklin Gothic Book', sans-serif; 
+                    color: var(--color-text); 
+                    padding: 8px 18px 25px 18px;
+                    width: 100%;
+                    box-sizing: border-box;
+                    height: calc(100vh - 65px);
+                    display: flex;
+                    flex-direction: column;
+                    overflow: hidden;
+                    gap: 8px;
+                }
 
                 .tabs-header-archivero-main {
-                    display: flex; gap: 8px; border-bottom: 2px solid #E0DCD4; margin-bottom: 12px; align-items: flex-end;
+                    display: flex; gap: 8px; border-bottom: 2px solid var(--color-border); margin-bottom: 4px; align-items: flex-end; flex-shrink: 0;
                 }
                 .tab-main-archivero {
                     display: flex; align-items: center; gap: 8px; padding: 9px 18px; background: #EAE8E1;
-                    border: 1.5px solid #E0DCD4; border-bottom: none; border-radius: 12px 12px 0 0;
-                    font-size: 0.82rem; font-weight: 800; color: #6B6255; cursor: pointer; transition: all 0.15s ease;
+                    border: 1.5px solid var(--color-border); border-bottom: none; border-radius: 12px 12px 0 0;
+                    font-size: 0.82rem; font-weight: 800; color: var(--color-text-secondary); cursor: pointer; transition: all 0.15s ease;
                     position: relative; bottom: -2px;
                 }
-                .tab-main-archivero:hover { background: #F0EEE8; color: #211C16; }
+                .tab-main-archivero:hover { background: #F0EEE8; color: var(--color-text); }
                 .tab-main-archivero.active {
-                    background: #FFFFFF; color: #123F2C; border-color: #E0DCD4; border-top: 3px solid #1E6B4C;
+                    background: #FFFFFF; color: var(--color-plant-dark); border-color: var(--color-border); border-top: 3px solid var(--color-plant);
                     box-shadow: 0 -2px 8px rgba(0,0,0,0.04);
                 }
                 .badge-tab-main {
@@ -332,16 +356,73 @@ const ModuloStockInsumos = {
                     border-radius: 12px; font-size: 0.68rem; font-weight: 800;
                 }
 
-                .panel-box-plant {
-                    background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 14px; padding: 14px;
-                    display: flex; flex-direction: column; gap: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.04);
+                /* CARDS / CARPETAS DE RESUMEN DE STOCK EXPANDIDAS */
+                .folder-grid {
+                    display: flex;
+                    gap: 12px;
+                    overflow-x: auto;
+                    padding: 4px 2px 8px 2px;
+                    flex-shrink: 0;
                 }
 
-                .wrapper-tabla-scroll-sticky {
-                    max-height: calc(100vh - 275px);
+                .folder-card {
+                    min-width: 190px;
+                    background: #FFFFFF;
+                    border: 1.5px solid var(--color-border);
+                    border-radius: var(--radius-md);
+                    padding: 10px 14px;
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.03);
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                }
+                .folder-card:hover {
+                    border-color: var(--color-plant);
+                    transform: translateY(-2px);
+                    box-shadow: 0 4px 10px rgba(30, 107, 76, 0.12);
+                }
+                .folder-card.active {
+                    border-color: var(--color-plant);
+                    background: #F0FDF4;
+                    box-shadow: 0 2px 8px rgba(30, 107, 76, 0.15);
+                }
+
+                .folder-title {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    font-size: 11px;
+                    font-weight: 800;
+                    color: var(--color-plant-dark);
+                }
+                .folder-subtitle {
+                    font-size: 10px;
+                    color: var(--color-text-secondary);
+                    margin-top: 4px;
+                    font-weight: 600;
+                }
+
+                /* PANEL PRINCIPAL FULL HEIGHT */
+                .panel-box-full {
+                    background: #FFFFFF;
+                    border: 1.5px solid var(--color-border);
+                    border-radius: var(--radius-lg);
+                    padding: 14px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.04);
+                    flex: 1;
+                    overflow: hidden;
+                }
+
+                .wrapper-tabla-scroll-full {
+                    flex: 1;
                     overflow-y: auto;
                     overflow-x: auto;
-                    border: 1px solid #E0DCD4;
+                    border: 1px solid var(--color-border);
                     border-radius: 10px;
                     background: #FFFFFF;
                     position: relative;
@@ -353,11 +434,11 @@ const ModuloStockInsumos = {
                     text-transform: uppercase; padding: 10px 8px; text-align: left; letter-spacing: 0.4px;
                     position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 3px rgba(0,0,0,0.12);
                 }
-                .tabla-cuadros-plant td { padding: 9px 8px; border-bottom: 1px solid #E0DCD4; color: #211C16; vertical-align: middle; }
+                .tabla-cuadros-plant td { padding: 9px 8px; border-bottom: 1px solid var(--color-border); color: var(--color-text); vertical-align: middle; }
                 .tabla-cuadros-plant tbody tr:hover { background: #F8FAFC; }
 
                 .btn-accion-plant {
-                    background: rgba(30, 107, 76, 0.1); border: 1px solid rgba(30,107,76,0.25); color: #1E6B4C;
+                    background: var(--color-plant-soft); border: 1px solid rgba(30,107,76,0.25); color: var(--color-plant);
                     padding: 4px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: 700; cursor: pointer;
                     display: inline-flex; align-items: center; gap: 4px; transition: background 0.15s;
                 }
@@ -368,8 +449,8 @@ const ModuloStockInsumos = {
             <div class="stock-ins-layout animated fadeIn">
                 ${typeof ComponentesUI !== 'undefined' && ComponentesUI.botonVolverHTML ? ComponentesUI.botonVolverHTML('INSUMOS') : ''}
 
-                <!-- HEADER SUPERIOR -->
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; margin-bottom:10px; flex-wrap:wrap; gap:10px;">
+                <!-- HEADER SUPERIOR FULL-WIDTH -->
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; flex-shrink:0;">
                     <div>
                         <h2 style="margin:0; font-weight: 800; font-size: 1.3rem; letter-spacing: -0.5px; color:#123F2C;">Auditoría de Stock de Insumos</h2>
                         <p style="margin:2px 0 0 0; font-size:0.75rem; color:#6B6255;">Entradas de remito menos consumos directos de labores y órdenes (Base Local)</p>
@@ -381,9 +462,6 @@ const ModuloStockInsumos = {
                         </button>
                         <button onclick="ModuloStockInsumos.m_exportarPDF()" style="background:#E0342A; color:#FFF; border:none; padding:7px 14px; border-radius:8px; font-size:0.75rem; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:5px;">
                             <i data-lucide="file-text" style="width:13px; height:13px;"></i> PDF Reporte
-                        </button>
-                        <button onclick="window.sincronizar_todo && window.sincronizar_todo()" style="background:#0071E3; color:#FFF; border:none; padding:7px 16px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer; display:flex; align-items:center; gap:6px;" title="Sincronizar con base central">
-                            <i data-lucide="refresh-cw" style="width:13px; height:13px;"></i> SINCRONIZAR ALL
                         </button>
                     </div>
                 </div>
@@ -407,16 +485,34 @@ const ModuloStockInsumos = {
                     </div>
                 </div>
 
-                <!-- BARRA DE BÚSQUEDA Y FILTROS -->
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
-                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                        <input type="text" id="buscador-stock" placeholder="🔍 Buscar insumo, rubro, sub-rubro..." value="${this.textoBusqueda}" oninput="ModuloStockInsumos.m_onBusquedaInput(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; min-width:280px;">
-                        
-                        <select onchange="ModuloStockInsumos.m_onDepositoChange(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; font-weight:600; cursor:pointer;">
-                            <option value="TODO">🏢 Todos los Depósitos</option>
-                            ${depositosDisponibles.map(d => `<option value="${d}" ${this.filtroDeposito === d ? 'selected' : ''}>${d}</option>`).join('')}
-                        </select>
+                <!-- CARPETAS HORIZONTALES POR DEPÓSITO -->
+                <div class="folder-grid scroll-apple">
+                    <div class="folder-card ${this.filtroDeposito === 'TODO' ? 'active' : ''}" onclick="ModuloStockInsumos.m_onDepositoChange('TODO')">
+                        <div class="folder-title">
+                            <span>🏢 TODOS LOS DEPÓSITOS</span>
+                            <span style="color:#1E6B4C;">${this.datosStock.length}</span>
+                        </div>
+                        <div class="folder-subtitle">Inventario consolidado general</div>
+                    </div>
+                    ${depositosDisponibles.map(dep => {
+                        const cantArticulos = this.datosOriginales.ingresos.filter(x => _normalizarTextoStock(x.campo_depo) === dep).length;
+                        return `
+                            <div class="folder-card ${this.filtroDeposito === dep ? 'active' : ''}" onclick="ModuloStockInsumos.m_onDepositoChange('${dep}')">
+                                <div class="folder-title">
+                                    <span>🏢 ${dep}</span>
+                                    <span style="color:#1E6B4C;">${cantArticulos} movs</span>
+                                </div>
+                                <div class="folder-subtitle">Existencia en este almacén</div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
 
+                <!-- BARRA DE BÚSQUEDA Y FILTROS -->
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:2px; flex-wrap:wrap; flex-shrink:0;">
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <input type="text" id="buscador-stock" placeholder="🔍 Buscar código, insumo, rubro, sub-rubro..." value="${this.textoBusqueda}" oninput="ModuloStockInsumos.m_onBusquedaInput(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; min-width:320px;">
+                        
                         <select id="filtro-tipo-insumo" onchange="ModuloStockInsumos.m_onTipoChange(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; font-weight:600; cursor:pointer;">
                             <option value="TODO">🏷️ Todos los Rubros</option>
                             ${rubrosUnicos.map(t => `<option value="${t}" ${this.filtroTipo === t ? 'selected' : ''}>${t}</option>`).join('')}
@@ -430,16 +526,16 @@ const ModuloStockInsumos = {
                     ` : ''}
                 </div>
 
-                <!-- TABLA EJECUTIVA -->
-                <div class="panel-box-plant">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                <!-- PANEL CONTENEDOR EXPANDIDO -->
+                <div class="panel-box-full">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-shrink:0;">
                         <span style="font-size:0.75rem; font-weight:800; color:#123F2C; text-transform:uppercase; letter-spacing:0.4px;">
                             📋 Balance de Stock Físico (${datos.length})
                         </span>
-                        <span style="font-size:0.72rem; color:#6B6255; font-weight:600;">Cabeceras fijas siempre visibles</span>
+                        <span style="font-size:0.72rem; color:#6B6255; font-weight:600;">Filas completas en tiempo real</span>
                     </div>
 
-                    <div class="wrapper-tabla-scroll-sticky scroll-apple">
+                    <div class="wrapper-tabla-scroll-full scroll-apple">
                         <table class="tabla-cuadros-plant">
                             <thead>
                                 <tr>
@@ -475,19 +571,33 @@ const ModuloStockInsumos = {
             const labelCondicion = esCritico ? 'SIN EXISTENCIA' : 'DISPONIBLE';
 
             const unicosDepositosConStock = [];
-            const historialDepositos = [...new Set(this.datosOriginales.ingresos.map(x => x.campo_depo).filter(Boolean))];
-            const artKeyTarget = _normalizarTextoStock(s.articulo);
+            const historialDepositos = [...new Set([
+                ...this.datosOriginales.ingresos.map(x => x.campo_depo),
+                ...this.datosOriginales.egresos.map(x => x.deposito_origen)
+            ].filter(Boolean))];
+
+            const targetCod = (s.cod_articulo || '').trim();
+            const targetNombre = _normalizarTextoStock(s.articulo);
             
             historialDepositos.forEach(depoName => {
                 const depoNorm = _normalizarTextoStock(depoName);
 
                 const ent = this.datosOriginales.ingresos
-                    .filter(x => _normalizarTextoStock(x.articulo) === artKeyTarget && _normalizarTextoStock(x.campo_depo) === depoNorm)
-                    .reduce((a, c) => a + (parseFloat(c.total) || parseFloat(c.cant) || parseFloat(c.cantidad) || 0), 0);
+                    .filter(x => {
+                        const matchDepo = _normalizarTextoStock(x.campo_depo) === depoNorm;
+                        const matchItem = (targetCod && String(x.cod_articulo).trim() === targetCod) || _normalizarTextoStock(x.articulo) === targetNombre;
+                        return matchDepo && matchItem;
+                    })
+                    .reduce((a, c) => a + (parseFloat(c.total) || parseFloat(c.cant) || 0), 0);
 
                 const sal = this.datosOriginales.egresos
-                    .filter(x => _normalizarTextoStock(x.insumo || x.articulo) === artKeyTarget && _normalizarTextoStock(x.deposito_origen) === depoNorm && (!_normalizarTextoStock(x.estado) || _normalizarTextoStock(x.estado) === 'ACTIVO'))
-                    .reduce((a, c) => a + (parseFloat(c.total_consumo) || parseFloat(c.cantidad) || parseFloat(c.cant) || parseFloat(c.dosis_ha) || 0), 0);
+                    .filter(x => {
+                        const matchDepo = _normalizarTextoStock(x.deposito_origen) === depoNorm;
+                        const matchItem = (targetCod && String(x.cod_articulo).trim() === targetCod) || _normalizarTextoStock(x.insumo || x.articulo) === targetNombre;
+                        const activo = !_normalizarTextoStock(x.estado) || _normalizarTextoStock(x.estado) === 'ACTIVO';
+                        return matchDepo && matchItem && activo;
+                    })
+                    .reduce((a, c) => a + (parseFloat(c.total_consumo) || 0), 0);
 
                 const netoDepo = ent - sal;
                 if (netoDepo > 0) {
@@ -526,7 +636,8 @@ const ModuloStockInsumos = {
                 <tr>
                     <td>
                         <strong style="color:#1D1D1F; font-size:0.86rem;">${s.articulo}</strong>
-                        ${s.descripcion ? `<div style="font-size:0.7rem; color:#6B6255;">${s.descripcion}</div>` : ''}
+                        ${s.cod_articulo ? `<div style="font-size:0.68rem; color:#0071E3; font-family:monospace; font-weight:bold;">COD: ${s.cod_articulo}</div>` : ''}
+                        ${s.descripcion && s.descripcion !== 'GENERAL' ? `<div style="font-size:0.7rem; color:#6B6255;">${s.descripcion}</div>` : ''}
                     </td>
                     <td>
                         <div style="display:flex; flex-wrap:wrap; gap:4px; align-items:center;">
@@ -571,7 +682,7 @@ const ModuloStockInsumos = {
         if (modalContent) modalContent.style.maxWidth = '680px';
 
         const codigoNorm = _normalizarTextoStock(codigoArticulo);
-        let art = this.datosOriginales.insumosMaestros.find(i => _normalizarTextoStock(i.articulo) === codigoNorm);
+        let art = this.datosOriginales.insumosMaestros.find(i => _normalizarTextoStock(i.articulo) === codigoNorm || String(i.reg_local).trim() === codigoNorm);
         if (!art) {
             const st = this.datosStock.find(x => _normalizarTextoStock(x.articulo) === codigoNorm);
             art = {
@@ -589,7 +700,7 @@ const ModuloStockInsumos = {
         const rubrosUnicos = [...new Set(this.datosOriginales.insumosMaestros.map(i => (i.rubro || '').trim().toUpperCase()).filter(r => r && r !== '0' && r !== 'SIN ASIGNAR'))].sort();
 
         container.innerHTML = `
-            <div style="display:flex; flex-direction:column; gap:12px; font-family:'Roboto', sans-serif;">
+            <div style="display:flex; flex-direction:column; gap:12px; font-family:'Franklin Gothic Book', sans-serif;">
                 <div style="background:rgba(30,107,76,0.08); border-left:4px solid #1E6B4C; padding:10px 14px; border-radius:8px;">
                     <strong style="color:#123F2C; font-size:0.85rem;">ASIGNACIÓN DE RUBRO Y SUB-RUBRO</strong>
                     <p style="font-size:0.72rem; margin:2px 0 0 0; color:#6B6255;">Seleccione o cree nuevos rubros y sub-rubros para clasificar el insumo.</p>
@@ -683,7 +794,6 @@ const ModuloStockInsumos = {
                     await this.m_ejecutarSqlLocal(sqlInsert, [nuevoRegLocal, rubro, subRubro, nuevoCodigo, descripcion, unidad]);
                 }
 
-                // Propagación si cambió el nombre del insumo
                 if (_normalizarTextoStock(codigoArticulo) !== _normalizarTextoStock(nuevoCodigo)) {
                     await this.m_ejecutarSqlLocal(`UPDATE insumos_ingresos SET articulo = ?, sincronizado = 0 WHERE UPPER(TRIM(articulo)) = ?`, [nuevoCodigo, codigoArticulo]);
                     await this.m_ejecutarSqlLocal(`UPDATE egresos_insumos SET insumo = ?, sincronizado = 0 WHERE UPPER(TRIM(insumo)) = ?`, [nuevoCodigo, codigoArticulo]);
@@ -705,7 +815,6 @@ const ModuloStockInsumos = {
         if (!selectSub) return;
 
         const rubroNorm = _normalizarTextoStock(rubroVal);
-
         if (!rubroNorm) {
             selectSub.innerHTML = '<option value="">Seleccione un Rubro primero...</option>';
             return;
@@ -802,11 +911,11 @@ const ModuloStockInsumos = {
 
             const ent = this.datosOriginales.ingresos
                 .filter(x => _normalizarTextoStock(x.articulo) === artKeyTarget && _normalizarTextoStock(x.campo_depo) === depoNorm)
-                .reduce((a,c) => a + (parseFloat(c.total) || parseFloat(c.cant) || parseFloat(c.cantidad) || 0), 0);
+                .reduce((a,c) => a + (parseFloat(c.total) || parseFloat(c.cant) || 0), 0);
 
             const sal = this.datosOriginales.egresos
                 .filter(x => _normalizarTextoStock(x.insumo || x.articulo) === artKeyTarget && _normalizarTextoStock(x.deposito_origen) === depoNorm && (!_normalizarTextoStock(x.estado) || _normalizarTextoStock(x.estado) === 'ACTIVO'))
-                .reduce((a,c) => a + (parseFloat(c.total_consumo) || parseFloat(c.cantidad) || parseFloat(c.cant) || 0), 0);
+                .reduce((a,c) => a + (parseFloat(c.total_consumo) || 0), 0);
 
             return { deposito: depoName, subtotal: ent - sal };
         }).filter(f => f.subtotal > 0);
@@ -814,7 +923,7 @@ const ModuloStockInsumos = {
         const container = document.getElementById('modal-formulario');
         
         container.innerHTML = `
-            <div style="display:flex; flex-direction:column; gap:14px; font-family:'Roboto', sans-serif;">
+            <div style="display:flex; flex-direction:column; gap:14px; font-family:'Franklin Gothic Book', sans-serif;">
                 <div style="background:#F8FAFC; border:1px solid #E0DCD4; padding:14px 16px; border-radius:12px; display:flex; justify-content:space-between; align-items:center;">
                     <div>
                         <div style="font-size:0.65rem; color:#6B6255; text-transform:uppercase; font-weight:700;">Artículo Seleccionado</div>
@@ -868,7 +977,7 @@ const ModuloStockInsumos = {
         const stockGlobalActual = matchStock ? matchStock.stock_actual : stockActual;
 
         container.innerHTML = `
-            <div style="display:flex; flex-direction:column; gap:12px; font-family:'Roboto', sans-serif;">
+            <div style="display:flex; flex-direction:column; gap:12px; font-family:'Franklin Gothic Book', sans-serif;">
                 <div style="background:rgba(0,113,227,0.06); padding:12px; border-radius:10px; font-size:0.82rem; color:#1D1D1F; border-left:4px solid #0071E3;">
                     <strong style="color: #0071E3;">Insumo:</strong> ${articulo}<br><strong>Origen:</strong> ${deposito}
                 </div>
@@ -906,9 +1015,11 @@ const ModuloStockInsumos = {
         if (btnSubmit) { btnSubmit.disabled = true; btnSubmit.innerText = "TRASLADANDO..."; }
 
         try {
-            const resMaxEgr = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(reg_local AS INTEGER)) as max_reg FROM egresos_insumos`);
+            const resMaxEgr = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(reg_local AS INTEGER)) as max_reg, MAX(CAST(id AS INTEGER)) as max_id FROM egresos_insumos`);
             const maxValEgr = (resMaxEgr.data && resMaxEgr.data[0] && resMaxEgr.data[0].max_reg) ? Number(resMaxEgr.data[0].max_reg) : 0;
+            const maxValIdEgr = (resMaxEgr.data && resMaxEgr.data[0] && resMaxEgr.data[0].max_id) ? Number(resMaxEgr.data[0].max_id) : 0;
             const nuevoRegLocalEgreso = String(maxValEgr + 1);
+            const nuevoIdEgreso = maxValIdEgr + 1;
 
             const resMaxIng = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(reg_local AS INTEGER)) as max_reg FROM insumos_ingresos`);
             const maxValIng = (resMaxIng.data && resMaxIng.data[0] && resMaxIng.data[0].max_reg) ? Number(resMaxIng.data[0].max_reg) : 0;
@@ -916,26 +1027,32 @@ const ModuloStockInsumos = {
 
             const fechaActual = new Date().toISOString().split('T')[0];
 
+            const maestro = (this.datosOriginales.insumosMaestros || []).find(m => 
+                _normalizarTextoStock(m.articulo) === _normalizarTextoStock(articulo)
+            );
+            const codArt = maestro?.reg_local || null;
+            const subRubro = maestro?.sub_rubro || null;
+
             const sqlInsertEgr = `
                 INSERT INTO egresos_insumos (
-                    reg_local, fecha, insumo, total_consumo, deposito_origen,
-                    estado, comentario, tabla_origen, sincronizado
-                ) VALUES (?, ?, ?, ?, ?, 'Activo', ?, 'CONTROL_STOCK_FRONT', 0)
+                    reg_local, id, fecha, insumo, total_consumo, deposito_origen,
+                    estado, comentario, tabla_origen, cod_articulo, sincronizado
+                ) VALUES (?, ?, ?, ?, ?, ?, 'Activo', ?, 'CONTROL_STOCK_FRONT', ?, 0)
             `;
             await this.m_ejecutarSqlLocal(sqlInsertEgr, [
-                nuevoRegLocalEgreso, fechaActual, articulo, cantidad, origen,
-                `TRASLADO INTERNO AUTOMÁTICO HACIA ${destino}`
+                nuevoRegLocalEgreso, nuevoIdEgreso, fechaActual, articulo, cantidad, origen,
+                `TRASLADO INTERNO AUTOMÁTICO HACIA ${destino}`, codArt
             ]);
 
             const sqlInsertIng = `
                 INSERT INTO insumos_ingresos (
                     reg_local, fecha, articulo, total, campo_depo,
-                    proveedor, descripcion, sincronizado
-                ) VALUES (?, ?, ?, ?, ?, 'TRANSFERENCIA INTERNA', ?, 0)
+                    proveedor, descripcion, cod_articulo, tipo_insumo, sincronizado
+                ) VALUES (?, ?, ?, ?, ?, 'TRANSFERENCIA INTERNA', ?, ?, ?, 0)
             `;
             await this.m_ejecutarSqlLocal(sqlInsertIng, [
                 nuevoRegLocalIngreso, fechaActual, articulo, cantidad, destino,
-                `STOCK TRASLADADO DESDE DEPÓSITO ${origen}`
+                `STOCK TRASLADADO DESDE DEPÓSITO ${origen}`, codArt, subRubro
             ]);
 
             this.m_cerrarModal();
@@ -961,7 +1078,7 @@ const ModuloStockInsumos = {
         const stockGlobalActual = matchStock ? matchStock.stock_actual : stockActual;
 
         container.innerHTML = `
-            <div style="display:flex; flex-direction:column; gap:12px; font-family:'Roboto', sans-serif;">
+            <div style="display:flex; flex-direction:column; gap:12px; font-family:'Franklin Gothic Book', sans-serif;">
                 <div style="background: #F8FAFC; border: 1px solid #E0DCD4; padding: 12px 14px; border-radius: 10px; display:grid; grid-template-columns: repeat(3, 1fr); gap:10px;">
                     <div>
                         <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Origen Establecimiento</label>
@@ -1088,7 +1205,7 @@ const ModuloStockInsumos = {
         const formOriginal = container.innerHTML;
 
         container.innerHTML = `
-            <div style="display:flex; flex-direction:column; gap:12px; font-family:'Roboto', sans-serif;">
+            <div style="display:flex; flex-direction:column; gap:12px; font-family:'Franklin Gothic Book', sans-serif;">
                 <div style="background:rgba(30,107,76,0.08); border-left:4px solid #1E6B4C; padding:10px 14px; border-radius:8px;">
                     <strong style="color:#123F2C; font-size:0.85rem;">NUEVA CATEGORÍA DE GASTO</strong>
                     <p style="font-size:0.72rem; margin:2px 0 0 0; color:#6B6255;">Agregue un concepto maestro en tipos_gastos para imputar egresos.</p>
@@ -1146,9 +1263,11 @@ const ModuloStockInsumos = {
         if (btnSave) { btnSave.disabled = true; btnSave.innerText = "DESPACHANDO..."; }
 
         try {
-            const resMax = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(reg_local AS INTEGER)) as max_reg FROM egresos_insumos`);
+            const resMax = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(reg_local AS INTEGER)) as max_reg, MAX(CAST(id AS INTEGER)) as max_id FROM egresos_insumos`);
             const maxVal = (resMax.data && resMax.data[0] && resMax.data[0].max_reg) ? Number(resMax.data[0].max_reg) : 0;
+            const maxValId = (resMax.data && resMax.data[0] && resMax.data[0].max_id) ? Number(resMax.data[0].max_id) : 0;
             const nuevoRegLocal = String(maxVal + 1);
+            const nuevoId = maxValId + 1;
 
             const supUso = parseFloat(document.getElementById('e_sup_input').value) || 0;
             const impUni = parseFloat(document.getElementById('e_imp_u').value) || 0;
@@ -1156,17 +1275,23 @@ const ModuloStockInsumos = {
             const tDolar = parseFloat(document.getElementById('e_t_dolar').value) || 0;
             const tPesos = parseFloat(document.getElementById('e_t_pesos').value) || 0;
 
+            const maestro = (this.datosOriginales.insumosMaestros || []).find(m => 
+                _normalizarTextoStock(m.articulo) === _normalizarTextoStock(articulo)
+            );
+            const codArt = maestro?.reg_local || null;
+
             const sqlInsert = `
                 INSERT INTO egresos_insumos (
-                    reg_local, fecha, insumo, deposito_origen, establecimiento,
+                    reg_local, id, fecha, insumo, deposito_origen, establecimiento,
                     campo, cuadro, labor, sup_uso, total_consumo, dosis_ha,
                     imp_uni, cotizacion, total_dolar, total_pesos, centro_costo,
-                    estado, tabla_origen, tipo_labor, sincronizado
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Activo', 'CONTROL_STOCK_FRONT', 'EGRESO DE STOCK', 0)
+                    estado, tabla_origen, tipo_labor, cod_articulo, sincronizado
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Activo', 'CONTROL_STOCK_FRONT', 'EGRESO DE STOCK', ?, 0)
             `;
 
             const paramsInsert = [
                 nuevoRegLocal,
+                nuevoId,
                 document.getElementById('e_fecha').value,
                 articulo,
                 deposito,
@@ -1181,9 +1306,9 @@ const ModuloStockInsumos = {
                 coti,
                 tDolar,
                 tPesos,
-                document.getElementById('e_centro').value || null
+                document.getElementById('e_centro').value || null,
+                codArt
             ];
-
             await this.m_ejecutarSqlLocal(sqlInsert, paramsInsert);
 
             this.m_cerrarModal();
@@ -1229,8 +1354,8 @@ const ModuloStockInsumos = {
                 <meta charset="UTF-8">
                 <title>Reporte de Stock - Salvucci Gestión</title>
                 <style>
-                    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&display=swap');
-                    body { font-family: 'Roboto', sans-serif; color: #211C16; padding: 35px; margin: 0; background: #F5F4F1; }
+                    @import url('https://fonts.googleapis.com/css2?family=Franklin Gothic Book:wght@400;500;700;900&display=swap');
+                    body { font-family: 'Franklin Gothic Book', sans-serif; color: #211C16; padding: 35px; margin: 0; background: #F5F4F1; }
                     .header-pdf-premium { border-bottom: 3px solid #1E6B4C; padding-bottom: 14px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; background:#FFFFFF; padding:18px; border-radius:12px; border:1px solid #E0DCD4; }
                     .logo-container-apple { width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; margin-right: 15px; }
                     .logo-container-apple img { width: 100%; height: 100%; object-fit: contain; }

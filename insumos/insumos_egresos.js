@@ -4,19 +4,24 @@
  * AgroSoft J&L - "Apple Soft Studio" Edition / Tipografía Roboto
  * Mode: Local-First (Engine SQLite IPC) + "No me quites nada" + Max(registro)+1 + sincronizado = 0
  */
+
+// Helper universal de normalización para evitar fallos por espacios o tildes
+const _normalizarTextoEgr = (txt) => (txt || '').toString().replace(/\s+/g, ' ').trim().toUpperCase();
+
 const ModuloEgresos = {
     datosEgresos: [],
     datosIngresos: [], 
     listaStocksCalculados: [], 
-    filtroOrigenActual: 'GLOBAL', // 'GLOBAL' o valor exacto de tabla_origen
-    filtroGrupoActual: '',        // Establecimiento / Destino
-    filtroBusquedaTxt: '',        // Cadena de texto del buscador
+    filtroOrigenActual: 'GLOBAL',   // 'GLOBAL' o valor exacto de tabla_origen
+    filtroDepositoActual: 'TODO',   // Depósito seleccionado en las CARDS
+    filtroEstablecimientoActual: '',// Establecimiento en el <select>
+    filtroBusquedaTxt: '',          // Cadena de texto del buscador
     parametros: {
-        gastos: [],   // Catálogo de tipos_gastos
-        cuadros: []   // Catálogo maestro de campos y cuadros
+        gastos: [],   
+        cuadros: [],
+        insumosMaestros: []
     },
 
-    // Helper IPC para ejecutar consultas SQL locales
     m_ejecutarSqlLocal: async function(sql, params = []) {
         if (window.apiLocal && window.apiLocal.query) {
             return await window.apiLocal.query({ sql, params });
@@ -47,7 +52,7 @@ const ModuloEgresos = {
         if (!modal) {
             const modalHTML = `
                 <div id="modal-agrosoft" class="modal-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(18, 22, 28, 0.48); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); z-index: 99999; justify-content: center; align-items: center; padding: 20px; box-sizing: border-box;">
-                    <div class="modal-apple-content" style="background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 14px; padding: 24px; width: 95%; max-width: 720px; max-height: 90vh; color: #1D1D1F; box-shadow: 0 10px 25px rgba(0,0,0,0.15); display: flex; flex-direction: column; position: relative;">
+                    <div class="modal-apple-content" style="background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 14px; padding: 24px; width: 95%; max-width: 760px; max-height: 90vh; color: #1D1D1F; box-shadow: 0 10px 25px rgba(0,0,0,0.15); display: flex; flex-direction: column; position: relative;">
                         <div class="modal-header-apple" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #E0DCD4; padding-bottom: 12px; flex-shrink: 0;">
                             <h3 id="modal-titulo" style="margin: 0; font-size: 1.15rem; font-weight: 800; font-family: 'Roboto', sans-serif; color: #123F2C; letter-spacing: -0.3px;">VALORIZACIÓN DE EGRESO</h3>
                             <button onclick="ModuloEgresos.m_cerrarModal()" style="background: none; border: none; color: #6E6E73; font-size: 1.5rem; font-weight:bold; cursor: pointer;">&times;</button>
@@ -91,20 +96,22 @@ const ModuloEgresos = {
     m_inicializar: async function() {
         const visor = document.getElementById('pantalla-dinamica');
         if (!visor) return;
-        visor.innerHTML = `<div class="loader-apple" style="font-family:'Roboto', sans-serif; text-align:center; padding:40px; color:#1E6B4C; font-weight:500;">Calculando existencias y costos de egresos desde base Local...</div>`;
+        visor.innerHTML = `<div class="loader-apple" style="font-family:'Roboto', sans-serif; text-align:center; padding:50px; color:#1E6B4C; font-weight:500;">Calculando existencias y costos de egresos desde base Local...</div>`;
 
         try {
-            const [resEgr, resIng, resGastos, resCuadros] = await Promise.all([
+            const [resEgr, resIng, resGastos, resCuadros, resIns] = await Promise.all([
                 this.m_ejecutarSqlLocal(`SELECT * FROM egresos_insumos ORDER BY fecha DESC`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM insumos_ingresos`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM tipos_gastos ORDER BY nombre_gasto ASC`),
-                this.m_ejecutarSqlLocal(`SELECT * FROM campos ORDER BY establecimiento ASC`)
+                this.m_ejecutarSqlLocal(`SELECT * FROM campos ORDER BY establecimiento ASC`),
+                this.m_ejecutarSqlLocal(`SELECT reg_local, articulo, sub_rubro, descripcion, unidad_medida FROM insumos`)
             ]);
 
             this.datosEgresos = resEgr.data || resEgr || [];
             this.datosIngresos = resIng.data || resIng || [];
             this.parametros.gastos = resGastos.data || resGastos || [];
             this.parametros.cuadros = resCuadros.data || resCuadros || [];
+            this.parametros.insumosMaestros = resIns.data || resIns || [];
 
             this.m_consolidarMatrizStock();
             this.m_dibujarEstructura();
@@ -114,21 +121,34 @@ const ModuloEgresos = {
         }
     },
 
+    // Consolidación de stock unificada por cod_articulo y depósito
     m_consolidarMatrizStock: function() {
         const mapaBalance = {};
+        const mapaMaestro = new Map();
+
+        (this.parametros.insumosMaestros || []).forEach(m => {
+            if (m.reg_local) mapaMaestro.set(String(m.reg_local).trim(), m);
+            if (m.articulo) mapaMaestro.set(_normalizarTextoEgr(m.articulo), m);
+        });
 
         this.datosIngresos.forEach(ing => {
-            const est = (ing.establecimiento || 'SIN CAMPO').trim().toUpperCase();
-            const depo = (ing.campo_depo || 'GENERAL').trim().toUpperCase();
-            const art = (ing.articulo || 'SIN ARTICULO').trim().toUpperCase();
-            const key = `${depo}||${art}`;
+            const est = _normalizarTextoEgr(ing.establecimiento || 'SIN CAMPO');
+            const depo = _normalizarTextoEgr(ing.campo_depo || 'GENERAL');
+            const codDirecto = (ing.cod_articulo || '').trim();
+            const artNombre = _normalizarTextoEgr(ing.articulo || 'SIN ARTICULO');
+
+            const maestro = (codDirecto && mapaMaestro.get(codDirecto)) || mapaMaestro.get(artNombre);
+            const claveArt = maestro?.reg_local || codDirecto || artNombre;
+            const nombreArtFinal = maestro?.articulo || ing.articulo;
+            const key = `${depo}||${claveArt}`;
 
             if (!mapaBalance[key]) {
                 mapaBalance[key] = { 
                     establecimiento: est, 
                     deposito: depo, 
-                    articulo: art, 
-                    unidad: ing.unidad || 'U', 
+                    articulo: nombreArtFinal, 
+                    cod_articulo: maestro?.reg_local || codDirecto || null,
+                    unidad: maestro?.unidad_medida || ing.unidad || 'U', 
                     ingresos: 0, 
                     egresos: 0 
                 };
@@ -139,9 +159,13 @@ const ModuloEgresos = {
         this.datosEgresos.forEach(egr => {
             if ((egr.estado || 'ACTIVO').toUpperCase() !== 'ACTIVO') return;
             
-            const depo = (egr.deposito_origen || 'GENERAL').trim().toUpperCase();
-            const art = (egr.insumo || '').trim().toUpperCase();
-            const key = `${depo}||${art}`;
+            const depo = _normalizarTextoEgr(egr.deposito_origen || 'GENERAL');
+            const codDirecto = (egr.cod_articulo || '').trim();
+            const artNombre = _normalizarTextoEgr(egr.insumo || '');
+
+            const maestro = (codDirecto && mapaMaestro.get(codDirecto)) || mapaMaestro.get(artNombre);
+            const claveArt = maestro?.reg_local || codDirecto || artNombre;
+            const key = `${depo}||${claveArt}`;
 
             if (mapaBalance[key]) {
                 mapaBalance[key].egresos += parseFloat(egr.total_consumo || 0);
@@ -154,28 +178,62 @@ const ModuloEgresos = {
         }));
     },
 
-    // ESTO LO MODIFIQUE / ACA ES LO NUEVO: Función de filtrado completo que soluciona el TypeError
+    m_filtrarPorDeposito: function(depVal) {
+        const depNorm = _normalizarTextoEgr(depVal);
+        if (this.filtroDepositoActual === depNorm && depVal !== 'TODO') {
+            this.filtroDepositoActual = 'TODO';
+        } else {
+            this.filtroDepositoActual = (depVal === 'TODO' || !depVal) ? 'TODO' : depNorm;
+        }
+        this.m_dibujarEstructura();
+    },
+
+    m_filtrarPorEstablecimiento: function(estVal) {
+        this.filtroEstablecimientoActual = estVal || '';
+        this.m_dibujarEstructura();
+    },
+
+    m_filtrarBusqueda: function(val) {
+        this.filtroBusquedaTxt = val || '';
+        this.m_dibujarEstructura();
+    },
+
+    m_limpiarFiltros: function() {
+        this.filtroOrigenActual = 'GLOBAL';
+        this.filtroDepositoActual = 'TODO';
+        this.filtroEstablecimientoActual = '';
+        this.filtroBusquedaTxt = '';
+        this.m_dibujarEstructura();
+    },
+
     m_obtenerEgresosFiltrados: function() {
         return this.datosEgresos.filter(e => {
             if (this.filtroOrigenActual && this.filtroOrigenActual !== 'GLOBAL') {
-                const origenNorm = (e.tabla_origen || 'DESPACHO_STOCK').trim().toUpperCase();
-                if (origenNorm !== this.filtroOrigenActual.trim().toUpperCase()) return false;
+                const origenNorm = _normalizarTextoEgr(e.tabla_origen || 'DESPACHO_STOCK');
+                if (origenNorm !== _normalizarTextoEgr(this.filtroOrigenActual)) return false;
             }
-            if (this.filtroGrupoActual) {
-                const estNorm = (e.establecimiento || '').trim().toUpperCase();
-                if (estNorm !== this.filtroGrupoActual.trim().toUpperCase()) return false;
+
+            if (this.filtroDepositoActual && this.filtroDepositoActual !== 'TODO') {
+                const depNorm = _normalizarTextoEgr(e.deposito_origen);
+                if (depNorm !== _normalizarTextoEgr(this.filtroDepositoActual)) return false;
             }
+
+            if (this.filtroEstablecimientoActual) {
+                const estNorm = _normalizarTextoEgr(e.establecimiento);
+                if (estNorm !== _normalizarTextoEgr(this.filtroEstablecimientoActual)) return false;
+            }
+
             if (this.filtroBusquedaTxt) {
                 const txt = this.filtroBusquedaTxt.toLowerCase();
                 const insumoMatch = (e.insumo || '').toLowerCase().includes(txt);
+                const codMatch = (e.cod_articulo || '').toLowerCase().includes(txt);
                 const laborMatch = (e.labor || e.tipo_labor || '').toLowerCase().includes(txt);
                 const contratistaMatch = (e.contratista || '').toLowerCase().includes(txt);
                 const centroMatch = (e.centro_costo || '').toLowerCase().includes(txt);
-                const origenMatch = (e.tabla_origen || '').toLowerCase().includes(txt);
+                const depMatch = (e.deposito_origen || '').toLowerCase().includes(txt);
                 const estMatch = (e.establecimiento || '').toLowerCase().includes(txt);
-                const campoMatch = (e.campo || '').toLowerCase().includes(txt);
                 const cuadroMatch = String(e.cuadro || '').toLowerCase().includes(txt);
-                if (!insumoMatch && !laborMatch && !contratistaMatch && !centroMatch && !origenMatch && !estMatch && !campoMatch && !cuadroMatch) return false;
+                if (!insumoMatch && !codMatch && !laborMatch && !contratistaMatch && !centroMatch && !depMatch && !estMatch && !cuadroMatch) return false;
             }
             return true;
         });
@@ -199,6 +257,11 @@ const ModuloEgresos = {
         const origenesDisponibles = ['GLOBAL', ...new Set(this.datosEgresos.map(e => (e.tabla_origen || 'DESPACHO_STOCK').toUpperCase()).filter(Boolean))];
         const establecimientos = [...new Set(this.datosEgresos.map(e => (e.establecimiento || '').toUpperCase()).filter(Boolean))].sort();
 
+        const depositosDisponibles = [...new Set([
+            ...this.datosIngresos.map(i => _normalizarTextoEgr(i.campo_depo)),
+            ...this.datosEgresos.map(e => _normalizarTextoEgr(e.deposito_origen))
+        ].filter(Boolean))].sort();
+
         visor.innerHTML = `
             <style>
                 :root {
@@ -210,23 +273,36 @@ const ModuloEgresos = {
                     --color-plant: #1E6B4C;
                     --color-plant-dark: #123F2C;
                     --color-plant-soft: rgba(30, 107, 76, 0.10);
+                    --radius-lg: 16px;
+                    --radius-md: 12px;
                 }
 
-                .egresos-layout { font-family: 'Roboto', sans-serif; color: #1D1D1F; padding: 8px 18px 25px 18px; }
+                .egresos-layout-full { 
+                    font-family: 'Roboto', sans-serif; 
+                    color: var(--color-text); 
+                    padding: 8px 18px 25px 18px; 
+                    width: 100%;
+                    box-sizing: border-box;
+                    height: calc(100vh - 65px);
+                    display: flex;
+                    flex-direction: column;
+                    overflow: hidden;
+                    gap: 8px;
+                }
 
                 .tabs-header-archivero-main {
-                    display: flex; gap: 8px; border-bottom: 2px solid #E0DCD4; margin-bottom: 12px; align-items: flex-end;
-                    overflow-x: auto;
+                    display: flex; gap: 8px; border-bottom: 2px solid var(--color-border); margin-bottom: 4px; align-items: flex-end;
+                    overflow-x: auto; flex-shrink: 0;
                 }
                 .tab-main-archivero {
-                    display: flex; align-items: center; gap: 8px; padding: 9px 18px; background: #EAE8E1;
-                    border: 1.5px solid #E0DCD4; border-bottom: none; border-radius: 12px 12px 0 0;
-                    font-size: 0.82rem; font-weight: 800; color: #6B6255; cursor: pointer; transition: all 0.15s ease;
+                    display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: #EAE8E1;
+                    border: 1.5px solid var(--color-border); border-bottom: none; border-radius: 12px 12px 0 0;
+                    font-size: 0.8rem; font-weight: 800; color: var(--color-text-secondary); cursor: pointer; transition: all 0.15s ease;
                     position: relative; bottom: -2px; white-space: nowrap;
                 }
-                .tab-main-archivero:hover { background: #F0EEE8; color: #211C16; }
+                .tab-main-archivero:hover { background: #F0EEE8; color: var(--color-text); }
                 .tab-main-archivero.active {
-                    background: #FFFFFF; color: #123F2C; border-color: #E0DCD4; border-top: 3px solid #1E6B4C;
+                    background: #FFFFFF; color: var(--color-plant-dark); border-color: var(--color-border); border-top: 3px solid var(--color-plant);
                     box-shadow: 0 -2px 8px rgba(0,0,0,0.04);
                 }
                 .badge-tab-main {
@@ -234,52 +310,53 @@ const ModuloEgresos = {
                     border-radius: 12px; font-size: 0.68rem; font-weight: 800;
                 }
 
+                /* CARPETAS / CARDS HORIZONTALES */
+                .folder-grid {
+                    display: flex; gap: 10px; overflow-x: auto; padding: 4px 2px 6px 2px; flex-shrink: 0;
+                }
+                .folder-card {
+                    min-width: 180px; background: #FFFFFF; border: 1.5px solid var(--color-border); border-radius: var(--radius-md);
+                    padding: 8px 12px; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 2px 5px rgba(0,0,0,0.03);
+                    display: flex; flex-direction: column; justify-content: center;
+                }
+                .folder-card:hover { border-color: var(--color-plant); transform: translateY(-2px); }
+                .folder-card.active { border-color: var(--color-plant); background: #F0FDF4; box-shadow: 0 2px 8px rgba(30,107,76,0.15); }
+
+                .folder-title { display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 800; color: var(--color-plant-dark); }
+                .folder-subtitle { font-size: 10px; color: var(--color-text-secondary); margin-top: 2px; font-weight: 600; }
+
+                /* KPIS */
                 .grid-kpi-egr {
-                    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px;
+                    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; flex-shrink: 0;
                 }
                 @media (max-width: 1100px) { .grid-kpi-egr { grid-template-columns: repeat(2, 1fr); } }
-                @media (max-width: 600px) { .grid-kpi-egr { grid-template-columns: 1fr; } }
 
                 .kpi-card-egr {
-                    background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 12px; padding: 12px 14px;
-                    display: flex; flex-direction: column; justify-content: space-between; gap: 4px;
-                    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03); transition: transform 0.15s ease, box-shadow 0.15s ease;
+                    background: #FFFFFF; border: 1.5px solid var(--color-border); border-radius: var(--radius-md); padding: 10px 14px;
+                    display: flex; flex-direction: column; justify-content: space-between; gap: 2px;
+                    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.03);
                 }
-                .kpi-card-egr:hover { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(0, 0, 0, 0.06); }
                 .kpi-header-row { display: flex; justify-content: space-between; align-items: center; }
-                .kpi-card-egr .kpi-label { font-size: 0.62rem; color: #6B6255; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
-                
-                .kpi-icon-pill {
-                    width: 26px; height: 26px; border-radius: 8px; display: flex;
-                    align-items: center; justify-content: center; flex-shrink: 0;
-                }
+                .kpi-card-egr .kpi-label { font-size: 0.62rem; color: var(--color-text-secondary); font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
                 .kpi-card-egr .kpi-value {
-                    font-size: 1.25rem; font-weight: 800; color: #1D1D1F; margin: 0; line-height: 1.15; letter-spacing: -0.3px;
+                    font-size: 1.25rem; font-weight: 800; color: var(--color-text); margin: 0; line-height: 1.15; letter-spacing: -0.3px;
                 }
                 .kpi-subtext { font-size: 0.68rem; color: #8E8E93; font-weight: 500; margin-top: 2px; display: block; }
 
                 .kpi-card-egr.accent-neutral { border-left: 4px solid #4B4F56; }
-                .kpi-card-egr.accent-neutral .kpi-icon-pill { background: #F0F2F5; color: #4B4F56; }
                 .kpi-card-egr.accent-blue { border-left: 4px solid #0071E3; }
-                .kpi-card-egr.accent-blue .kpi-icon-pill { background: rgba(0, 113, 227, 0.08); color: #0071E3; }
                 .kpi-card-egr.accent-green { border-left: 4px solid #1E6B4C; }
-                .kpi-card-egr.accent-green .kpi-icon-pill { background: rgba(30, 107, 76, 0.1); color: #1E6B4C; }
                 .kpi-card-egr.accent-orange { border-left: 4px solid #E08600; }
-                .kpi-card-egr.accent-orange .kpi-icon-pill { background: rgba(224, 134, 0, 0.1); color: #E08600; }
 
-                .panel-box-plant {
-                    background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 14px; padding: 14px;
-                    display: flex; flex-direction: column; gap: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.04);
+                /* PANEL FULL HEIGHT */
+                .panel-box-full {
+                    background: #FFFFFF; border: 1.5px solid var(--color-border); border-radius: var(--radius-lg);
+                    padding: 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.04);
+                    flex: 1; overflow: hidden;
                 }
-
-                .wrapper-tabla-scroll-sticky {
-                    max-height: calc(100vh - 275px);
-                    overflow-y: auto;
-                    overflow-x: auto;
-                    border: 1px solid #E0DCD4;
-                    border-radius: 10px;
-                    background: #FFFFFF;
-                    position: relative;
+                .wrapper-tabla-scroll-full {
+                    flex: 1; overflow-y: auto; overflow-x: auto; border: 1px solid var(--color-border);
+                    border-radius: 10px; background: #FFFFFF; position: relative;
                 }
 
                 .tabla-cuadros-plant { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
@@ -288,11 +365,11 @@ const ModuloEgresos = {
                     text-transform: uppercase; padding: 10px 8px; text-align: left; letter-spacing: 0.4px;
                     position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 3px rgba(0,0,0,0.12);
                 }
-                .tabla-cuadros-plant td { padding: 9px 8px; border-bottom: 1px solid #E0DCD4; color: #211C16; vertical-align: middle; }
+                .tabla-cuadros-plant td { padding: 9px 8px; border-bottom: 1px solid var(--color-border); color: var(--color-text); vertical-align: middle; }
                 .tabla-cuadros-plant tbody tr:hover { background: #F8FAFC; }
 
                 .btn-accion-plant {
-                    background: rgba(30, 107, 76, 0.1); border: 1px solid rgba(30,107,76,0.25); color: #1E6B4C;
+                    background: var(--color-plant-soft); border: 1px solid rgba(30,107,76,0.25); color: var(--color-plant);
                     padding: 4px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: 700; cursor: pointer;
                     display: inline-flex; align-items: center; gap: 4px; transition: background 0.15s;
                 }
@@ -301,11 +378,11 @@ const ModuloEgresos = {
                 .btn-delete-plant:hover { background: rgba(224,52,42,0.2); }
             </style>
 
-            <div class="egresos-layout animated fadeIn">
+            <div class="egresos-layout-full animated fadeIn">
                 ${ComponentesUI.botonVolverHTML('INSUMOS')}
 
-                <!-- HEADER SUPERIOR -->
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; margin-bottom:10px; flex-wrap:wrap; gap:10px;">
+                <!-- HEADER SUPERIOR FULL-WIDTH -->
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; flex-shrink:0;">
                     <div>
                         <h2 style="margin:0; font-weight: 800; font-size: 1.3rem; letter-spacing: -0.5px; color:#123F2C;">Control de Costos y Egresos</h2>
                         <p style="margin:2px 0 0 0; font-size:0.75rem; color:#6B6255;">Despachos valorizados, consumo de insumos y servicios de labor (Base Local)</p>
@@ -341,89 +418,58 @@ const ModuloEgresos = {
                     }).join('')}
                 </div>
 
-                <!-- KPIS PRINCIPALES -->
-                <div class="grid-kpi-egr">
-                    <div class="card-kpi-egr accent-neutral">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">TOTAL REGISTROS</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="list" style="width:14px; height:14px;"></i>
-                            </div>
+                <!-- CARPETAS HORIZONTALES POR DEPÓSITO DE ORIGEN -->
+                <div class="folder-grid scroll-apple">
+                    <div class="folder-card ${this.filtroDepositoActual === 'TODO' ? 'active' : ''}" onclick="ModuloEgresos.m_filtrarPorDeposito('TODO')">
+                        <div class="folder-title">
+                            <span>🏢 TODOS LOS ALMACENES</span>
+                            <span style="color:#1E6B4C;">${this.datosEgresos.length}</span>
                         </div>
-                        <div>
-                            <h3 class="kpi-value">${datos.length} <small>Movs</small></h3>
-                            <span class="kpi-subtext">Filtrados en selección</span>
-                        </div>
+                        <div class="folder-subtitle">Salidas generales consolidadas</div>
                     </div>
-
-                    <div class="card-kpi-egr accent-blue">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">INVERSIÓN TOTAL (U$S)</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="dollar-sign" style="width:14px; height:14px;"></i>
+                    ${depositosDisponibles.map(dep => {
+                        const cantMovs = this.datosEgresos.filter(e => _normalizarTextoEgr(e.deposito_origen) === dep).length;
+                        return `
+                            <div class="folder-card ${this.filtroDepositoActual === dep ? 'active' : ''}" onclick="ModuloEgresos.m_filtrarPorDeposito('${dep}')">
+                                <div class="folder-title">
+                                    <span>🏢 ${dep}</span>
+                                    <span style="color:#1E6B4C;">${cantMovs} movs</span>
+                                </div>
+                                <div class="folder-subtitle">Egresos desde este galpón</div>
                             </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value" style="color:#0071E3;">U$S ${totalUsd.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</h3>
-                            <span class="kpi-subtext">$ ${totalPesos.toLocaleString('es-AR')} ARS</span>
-                        </div>
-                    </div>
-
-                    <div class="card-kpi-egr accent-orange">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">VOLUMEN CONSUMO</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="package" style="width:14px; height:14px;"></i>
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value" style="color:#E08600;">${totalConsumo.toLocaleString('es-AR')} <small>Unidades</small></h3>
-                            <span class="kpi-subtext">${totalHasUso.toFixed(1)} Has cubiertas</span>
-                        </div>
-                    </div>
-
-                    <div class="card-kpi-egr accent-green">
-                        <div class="kpi-header-row">
-                            <span class="kpi-label">COSTO PROMEDIO / HA</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="trending-up" style="width:14px; height:14px;"></i>
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="kpi-value" style="color:#1E6B4C;">U$S ${(totalHasUso > 0 ? (totalUsd / totalHasUso).toFixed(2) : '0.00')} <small>/ Ha</small></h3>
-                            <span class="kpi-subtext">Ponderado por superficie</span>
-                        </div>
-                    </div>
+                        `;
+                    }).join('')}
                 </div>
 
+            
                 <!-- BARRA DE BÚSQUEDA Y FILTROS -->
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:2px; flex-wrap:wrap; flex-shrink:0;">
                     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                        <input type="text" id="buscador-egresos" placeholder="🔍 Buscar insumo, labor, lote, centro de costo..." value="${this.filtroBusquedaTxt}" oninput="ModuloEgresos.m_filtrarBusqueda(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; min-width:240px;">
+                        <input type="text" id="buscador-egresos" placeholder="🔍 Buscar código, insumo, labor, lote, centro de costo..." value="${this.filtroBusquedaTxt}" oninput="ModuloEgresos.m_filtrarBusqueda(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; min-width:320px;">
                         
-                        <select onchange="ModuloEgresos.m_filtrarPorGrupo(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; font-weight:600; cursor:pointer;">
+                        <select onchange="ModuloEgresos.m_filtrarPorEstablecimiento(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; font-weight:600; cursor:pointer;">
                             <option value="">📍 Todos los Establecimientos</option>
-                            ${establecimientos.map(e => `<option value="${e}" ${this.filtroGrupoActual === e ? 'selected' : ''}>${e.toUpperCase()}</option>`).join('')}
+                            ${establecimientos.map(e => `<option value="${e}" ${this.filtroEstablecimientoActual === e ? 'selected' : ''}>${e.toUpperCase()}</option>`).join('')}
                         </select>
                     </div>
 
-                    ${(this.filtroOrigenActual !== 'GLOBAL' || this.filtroGrupoActual || this.filtroBusquedaTxt) ? `
+                    ${(this.filtroOrigenActual !== 'GLOBAL' || this.filtroDepositoActual !== 'TODO' || this.filtroEstablecimientoActual || this.filtroBusquedaTxt) ? `
                         <button onclick="ModuloEgresos.m_limpiarFiltros()" style="background:rgba(224,52,42,0.1); border:1px solid rgba(224,52,42,0.25); color:#E0342A; padding:5px 12px; border-radius:6px; font-size:0.72rem; font-weight:700; cursor:pointer;">
                             ✕ Limpiar Filtros
                         </button>
                     ` : ''}
                 </div>
 
-                <!-- TABLA EJECUTIVA CON CABECERAS FIJAS -->
-                <div class="panel-box-plant">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                <!-- CONTENEDOR FULL-HEIGHT CON TABLA EXPANDIDA -->
+                <div class="panel-box-full">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-shrink:0;">
                         <span style="font-size:0.75rem; font-weight:800; color:#123F2C; text-transform:uppercase; letter-spacing:0.4px;">
                             📋 Registro de Egresos y Salidas Valorizadas (${datos.length})
                         </span>
-                        <span style="font-size:0.72rem; color:#6B6255; font-weight:600;">Cabeceras fijas siempre visibles</span>
+                        <span style="font-size:0.72rem; color:#6B6255; font-weight:600;">Filas completas en tiempo real</span>
                     </div>
 
-                    <div class="wrapper-tabla-scroll-sticky scroll-apple">
+                    <div class="wrapper-tabla-scroll-full scroll-apple">
                         <table class="tabla-cuadros-plant">
                             <thead>
                                 <tr>
@@ -470,7 +516,8 @@ const ModuloEgresos = {
                     </td>
                     <td>
                         <strong>${e.insumo || 'S/I'}</strong>
-                        ${e.centro_costo ? `<br><small style="color:#6B6255;">CC: ${e.centro_costo}</small>` : ''}
+                        ${e.cod_articulo ? `<div style="font-size:0.68rem; color:#0071E3; font-family:monospace; font-weight:bold;">COD: ${e.cod_articulo}</div>` : ''}
+                        ${e.centro_costo ? `<small style="color:#6B6255;">CC: ${e.centro_costo}</small>` : ''}
                     </td>
                     <td><span style="background:#F0F2F5; color:#1D1D1F; padding:2px 6px; border-radius:4px; font-size:0.72rem; font-weight:600;">${e.labor || e.tipo_labor || '-'}</span></td>
                     <td>
@@ -494,23 +541,6 @@ const ModuloEgresos = {
                 </tr>
             `;
         }).join('');
-    },
-
-    m_filtrarPorGrupo: function(estVal) {
-        this.filtroGrupoActual = estVal || '';
-        this.m_dibujarEstructura();
-    },
-
-    m_filtrarBusqueda: function(val) {
-        this.filtroBusquedaTxt = val || '';
-        this.m_dibujarEstructura();
-    },
-
-    m_limpiarFiltros: function() {
-        this.filtroOrigenActual = 'GLOBAL';
-        this.filtroGrupoActual = '';
-        this.filtroBusquedaTxt = '';
-        this.m_dibujarEstructura();
     },
 
     m_abrirModalCreacion: function() {
@@ -653,8 +683,9 @@ const ModuloEgresos = {
             return;
         }
 
+        const estNorm = _normalizarTextoEgr(estSel);
         const depositosFiltrados = [...new Set(this.listaStocksCalculados
-            .filter(s => s.establecimiento === estSel && s.disponible > 0)
+            .filter(s => _normalizarTextoEgr(s.establecimiento) === estNorm && s.disponible > 0)
             .map(s => s.deposito))];
 
         selectDepo.innerHTML = '<option value="">Seleccione depósito...</option>' +
@@ -673,46 +704,93 @@ const ModuloEgresos = {
             return;
         }
 
+        const estNorm = _normalizarTextoEgr(estSel);
+        const depNorm = _normalizarTextoEgr(depSel);
+
         const insumosDisponibles = this.listaStocksCalculados.filter(s => 
-            s.establecimiento === estSel && s.deposito === depSel && s.disponible > 0
+            _normalizarTextoEgr(s.establecimiento) === estNorm && 
+            _normalizarTextoEgr(s.deposito) === depNorm && 
+            s.disponible > 0
         );
 
-        selectInsumo.innerHTML = '<option value="">Seleccione artículo...</option>' +
-            insumosDisponibles.map(i => `<option value="${i.articulo}">${i.articulo} (${i.disponible} ${i.unidad})</option>`).join('');
+        const mapaMaestro = new Map();
+        (this.parametros.insumosMaestros || []).forEach(m => {
+            if (m.articulo) mapaMaestro.set(_normalizarTextoEgr(m.articulo), m);
+            if (m.reg_local) mapaMaestro.set(String(m.reg_local).trim(), m);
+        });
+
+        selectInsumo.innerHTML = '<option value="">Seleccione artículo con stock...</option>' +
+            insumosDisponibles.map(i => {
+                const codDirecto = (i.cod_articulo || '').trim();
+                const artNom = _normalizarTextoEgr(i.articulo || '');
+                const maestro = (codDirecto && mapaMaestro.get(codDirecto)) || mapaMaestro.get(artNom);
+                const codFinal = maestro?.reg_local || codDirecto || '';
+                const unidadFinal = maestro?.unidad_medida || i.unidad || 'U';
+
+                // Búsqueda del último registro de compra en ingresos para clonar sus metadatos
+                const ultimoIng = this.datosIngresos.find(ing => 
+                    (codFinal && String(ing.cod_articulo).trim() === codFinal) ||
+                    _normalizarTextoEgr(ing.articulo || '') === artNom
+                );
+                const precioCompra = parseFloat(ultimoIng?.imp_uni || ultimoIng?.precio || 0);
+                const descTecnica = maestro?.descripcion || ultimoIng?.descripcion || '';
+                const subRubro = maestro?.sub_rubro || ultimoIng?.tipo_insumo || '';
+
+                return `
+                    <option value="${i.articulo}" 
+                        data-cod="${codFinal}" 
+                        data-disponible="${i.disponible}" 
+                        data-unidad="${unidadFinal}" 
+                        data-precio="${precioCompra}"
+                        data-desc="${descTecnica}"
+                        data-rubro="${subRubro}">
+                        📦 ${i.articulo.toUpperCase()} — Disp: ${i.disponible} ${unidadFinal}
+                    </option>
+                `;
+            }).join('');
+
+        const lbl = document.getElementById('lbl_stk_disponible');
+        if (lbl) {
+            lbl.innerText = '0.00 Unidades';
+            lbl.style.color = '#1D1D1F';
+        }
     },
 
     m_onCreacionInsumoChange: function(artSel) {
         const lbl = document.getElementById('lbl_stk_disponible');
         const estSel = document.getElementById('e_est').value;
         const depSel = document.getElementById('e_dep_origen').value;
-        if (!lbl) return;
+        const selectInsumo = document.getElementById('e_insumo');
+        if (!lbl || !selectInsumo) return;
 
-        const match = this.listaStocksCalculados.find(s => 
-            s.establecimiento === estSel && s.deposito === depSel && s.articulo === artSel
-        );
-
-        if (match) {
-            lbl.innerText = `${match.disponible.toLocaleString('es-AR')} ${match.unidad}`;
-            lbl.style.color = match.disponible <= 5 ? '#E08600' : '#1E6B4C';
-
-            const ultimoIngreso = ModuloEgresos.datosIngresos.find(i =>
-                (i.articulo || '').trim().toUpperCase() === artSel.trim().toUpperCase()
-            );
-
-            if (ultimoIngreso) {
-                const inputPrecio = document.getElementById('e_imp_u');
-                if (inputPrecio) {
-                    inputPrecio.value = parseFloat(ultimoIngreso.imp_uni || ultimoIngreso.precio || ultimoIngreso.costo || 0);
-                    inputPrecio.style.backgroundColor = 'rgba(30, 107, 76, 0.1)';
-                    setTimeout(() => { inputPrecio.style.backgroundColor = ''; }, 800);
-                }
-            }
-            ModuloEgresos.m_recalcular();
-
-        } else {
+        const optSelected = selectInsumo.selectedOptions[0];
+        if (!optSelected || !optSelected.value) {
             lbl.innerText = '0.00 Unidades';
             lbl.style.color = '#1D1D1F';
+            return;
         }
+
+        const codArtSel = optSelected.getAttribute('data-cod') || '';
+        const disponible = parseFloat(optSelected.getAttribute('data-disponible')) || 0;
+        const unidad = optSelected.getAttribute('data-unidad') || 'U';
+        const precioUnitario = parseFloat(optSelected.getAttribute('data-precio')) || 0;
+
+        lbl.innerText = `${disponible.toLocaleString('es-AR')} ${unidad}`;
+        lbl.style.color = disponible <= 5 ? '#E08600' : '#1E6B4C';
+
+        const inputPrecio = document.getElementById('e_imp_u');
+        if (inputPrecio) {
+            inputPrecio.value = precioUnitario;
+            inputPrecio.style.backgroundColor = 'rgba(30, 107, 76, 0.1)';
+            setTimeout(() => { inputPrecio.style.backgroundColor = ''; }, 700);
+        }
+
+        const inputCant = document.getElementById('e_cant_input');
+        if (inputCant) {
+            inputCant.max = disponible;
+        }
+
+        ModuloEgresos.m_recalcular();
     },
 
     m_onDestinoEstablecimientoChange: function(estSel) {
@@ -724,8 +802,9 @@ const ModuloEgresos = {
             return;
         }
 
+        const estNorm = _normalizarTextoEgr(estSel);
         const cuadrosFiltrados = this.parametros.cuadros.filter(c => 
-            (c.establecimiento || '').trim().toUpperCase() === estSel.trim().toUpperCase()
+            _normalizarTextoEgr(c.establecimiento || '') === estNorm
         );
 
         selectCuadro.innerHTML = '<option value="">Seleccione Lote / Cuadro...</option>' +
@@ -846,9 +925,10 @@ const ModuloEgresos = {
         const totalPesosInput = parsearDecimalSoft('e_t_pesos');
         const totalDolarInput = parsearDecimalSoft('e_t_dolar');
         const costoFinalHaDolarInput = parsearDecimalSoft('e_c_ha_u');
-
+        
         const fechaVal = document.getElementById('e_fecha').value;
-        const insumoVal = document.getElementById('e_insumo').value;
+        const selectInsumo = document.getElementById('e_insumo');
+        const insumoVal = selectInsumo?.value || '';
         const depOrigenVal = document.getElementById('e_dep_origen').value;
         const estDestinoVal = document.getElementById('e_est_destino').value;
 
@@ -857,14 +937,22 @@ const ModuloEgresos = {
             return;
         }
 
-        const matchStock = this.listaStocksCalculados.find(s => 
-            s.deposito === depOrigenVal && 
-            s.articulo === insumoVal
-        );
+        const optSelected = selectInsumo.selectedOptions[0];
+        let codArt = optSelected?.getAttribute('data-cod') || '';
+        const disponibleActual = parseFloat(optSelected?.getAttribute('data-disponible')) || 0;
+        const descTecnica = optSelected?.getAttribute('data-desc') || '';
+        const subRubro = optSelected?.getAttribute('data-rubro') || '';
 
-        if (matchStock && totalConsumoInput > matchStock.disponible) {
-            this.m_notificarAlerta(`Stock insuficiente en galpón (${matchStock.disponible} disponibles).`, 'alerta');
+        if (totalConsumoInput > disponibleActual) {
+            this.m_notificarAlerta(`Stock insuficiente en galpón: Hay ${disponibleActual} disponibles para despachar.`, 'alerta');
             return;
+        }
+
+        if (!codArt) {
+            const maestro = (this.parametros.insumosMaestros || []).find(m => 
+                _normalizarTextoEgr(m.articulo || '') === _normalizarTextoEgr(insumoVal)
+            );
+            codArt = maestro?.reg_local || null;
         }
 
         if (btn) {
@@ -873,30 +961,55 @@ const ModuloEgresos = {
         }
 
         try {
-            const resMaxReg = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(reg_local AS INTEGER)) as max_reg FROM egresos_insumos`);
-            const maxVal = (resMaxReg.data && resMaxReg.data[0] && resMaxReg.data[0].max_reg) ? Number(resMaxReg.data[0].max_reg) : 0;
-            const nuevoRegLocal = String(maxVal + 1);
+            const resMaxReg = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(reg_local AS INTEGER)) as max_reg, MAX(CAST(id AS INTEGER)) as max_id FROM egresos_insumos`);
+            const maxValReg = (resMaxReg.data && resMaxReg.data[0] && resMaxReg.data[0].max_reg) ? Number(resMaxReg.data[0].max_reg) : 0;
+            const maxValId = (resMaxReg.data && resMaxReg.data[0] && resMaxReg.data[0].max_id) ? Number(resMaxReg.data[0].max_id) : 0;
+            
+            const nuevoRegLocal = String(maxValReg + 1);
+            const nuevoId = maxValId + 1;
 
             const sqlInsert = `
                 INSERT INTO egresos_insumos (
-                    reg_local, tabla_origen, orden_trab, ref_orden, fecha, deposito_origen,
+                    reg_local, id, tabla_origen, orden_trab, ref_orden, fecha, deposito_origen,
                     insumo, establecimiento, campo, cuadro, sup_uso, dosis_ha, total_consumo,
                     imp_uni, total_dolar, cotizacion, total_pesos, centro_costo, labor, tipo_labor,
                     contratista, apoyo, ha_apoyo, costo_ha, total_apoyo, costo_final,
-                    costo_final_ha_dolar, comentario, estado, sincronizado
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    costo_final_ha_dolar, comentario, estado, cod_articulo, sincronizado
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             `;
 
             const paramsInsert = [
-                nuevoRegLocal, 'DESPACHO_STOCK', null, null, fechaVal, depOrigenVal,
-                insumoVal, estDestinoVal, document.getElementById('e_campo').value,
-                document.getElementById('e_cuadro_txt').value, supUsoInput, 0,
-                totalConsumoInput, impUniInput, totalDolarInput, cotizacionInput,
-                totalPesosInput, document.getElementById('e_centro').value,
-                document.getElementById('e_labor').value.trim(), 'EGRESO DE STOCK',
-                null, null, 0, 0, 0, (impUniInput * supUsoInput),
-                costoFinalHaDolarInput, 'Despacho Financiero Consolidado por Cuadros',
-                'Activo', 0
+                nuevoRegLocal, 
+                nuevoId, 
+                'DESPACHO_STOCK', 
+                null, 
+                null, 
+                fechaVal, 
+                depOrigenVal,
+                insumoVal, 
+                estDestinoVal, 
+                document.getElementById('e_campo').value || '',
+                document.getElementById('e_cuadro_txt').value || 'GENERAL', 
+                supUsoInput, 
+                0,
+                totalConsumoInput, 
+                impUniInput, 
+                totalDolarInput, 
+                cotizacionInput,
+                totalPesosInput, 
+                document.getElementById('e_centro').value || subRubro || 'INSUMOS',
+                document.getElementById('e_labor').value.trim() || 'DESPACHO DE STOCK', 
+                subRubro || 'EGRESO DE STOCK',
+                null, 
+                null, 
+                0, 
+                0, 
+                0, 
+                (impUniInput * supUsoInput),
+                costoFinalHaDolarInput, 
+                descTecnica || 'Despacho Directo de Stock',
+                'Activo', 
+                codArt
             ];
 
             await this.m_ejecutarSqlLocal(sqlInsert, paramsInsert);
@@ -913,7 +1026,7 @@ const ModuloEgresos = {
             }
         }
     },
-
+    
     m_abrirModalEdicion: function(reg_local, id) {
         this.m_asegurarModalBase();
         const reg = this.datosEgresos.find(e => String(e.reg_local) === String(reg_local) && (e.id == id || !id));
@@ -983,7 +1096,7 @@ const ModuloEgresos = {
                     <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Centro de Costo Imputable</label>
                     <select id="e_centro" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; background:#FFFFFF;">
                         <option value="">Seleccione Centro de Costo...</option>
-                        ${this.parametros.gastos.map(g => `<option value="${g.nombre_gasto}" ${reg.centro_costo === g.nombre_gasto ? 'selected' : ''}>${g.nombre_gasto}</option>`).join('')}
+                        ${this.parametros.gastos.map(g => `<option value="${g.nombre_gasto}">${g.nombre_gasto}</option>`).join('')}
                     </select>
                 </div>
 
@@ -1156,7 +1269,7 @@ const ModuloEgresos = {
 
         doc.setFontSize(8);
         doc.text(`Generado: ${new Date().toLocaleString('es-AR')}`, anchoPagina - 12, 10, { align: 'right' });
-        doc.text(`Origen: ${this.filtroOrigenActual} | Destino: ${this.filtroGrupoActual || 'TODOS'}`, anchoPagina - 12, 16, { align: 'right' });
+        doc.text(`Origen: ${this.filtroOrigenActual} | Destino: ${this.filtroEstablecimientoActual || 'TODOS'}`, anchoPagina - 12, 16, { align: 'right' });
 
         const cabeceras = [['FECHA', 'ORIGEN', 'INSUMO', 'LABOR', 'DESTINO TÉCNICO', 'CENTRO DE COSTO', 'CONSUMO', 'U$S UNIT.', 'COSTO HA U$S']];
 
@@ -1226,6 +1339,10 @@ const ModuloEgresos = {
         const datos = this.m_obtenerEgresosFiltrados();
         if (datos.length === 0) return alert("No hay registros para exportar.");
 
+        const numFmt = '#,##0.00';
+        const dolarFmt = '"U$S" #,##0.00';
+        const pesosFmt = '"$" #,##0.00';
+
         const encabezados = [
             'REG. LOCAL', 'ORIGEN TABLA', 'FECHA', 'INSUMO', 'LABOR', 'TIPO LABOR', 'DEPÓSITO ORIGEN',
             'ESTABLECIMIENTO', 'CAMPO', 'CUADRO', 'CONTRATISTA', 'SUP. USO (HA)', 'CONSUMO TOTAL',
@@ -1273,10 +1390,6 @@ const ModuloEgresos = {
         ];
         ws['!autofilter'] = { ref: `A1:U${filas.length + 1}` };
         ws['!views'] = [{ state: 'frozen', ySplit: 1 }];
-
-        const numFmt = '#,##0.00';
-        const dolarFmt = '"U$S" #,##0.00';
-        const pesosFmt = '"$" #,##0.00';
 
         for (let r = 2; r <= filas.length + 2; r++) {
             [['L', numFmt], ['M', numFmt], ['N', dolarFmt], ['O', numFmt], ['P', dolarFmt], ['Q', pesosFmt], ['R', dolarFmt]].forEach(([col, fmt]) => {

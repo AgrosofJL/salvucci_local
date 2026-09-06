@@ -560,6 +560,7 @@ const ModuloInsumos = {
 
         container.innerHTML = `
             <div style="display:flex; flex-direction:column; gap:12px; font-family:'Roboto', sans-serif;">
+            <input type="hidden" id="i_cod_articulo" value="${reg?.cod_articulo || ''}">
                 <div style="background: #F8FAFC; border: 1px solid #E0DCD4; padding: 14px; border-radius: 12px; display:grid; grid-template-columns:repeat(3, 1fr); gap:12px;">
                     <div>
                         <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Fecha Carga</label>
@@ -1162,12 +1163,16 @@ const ModuloInsumos = {
         if (!query || query.length < 2) return;
         try {
             const res = await this.m_ejecutarSqlLocal(
-                `SELECT articulo, descripcion, unidad_medida as unidad FROM insumos WHERE articulo LIKE ? LIMIT 8`,
+                `SELECT reg_local, articulo, descripcion, sub_rubro, unidad_medida as unidad FROM insumos WHERE articulo LIKE ? LIMIT 8`,
                 [`%${query}%`]
             );
             const datalist = document.getElementById('lista-articulos');
             if (datalist && res.data) {
-                datalist.innerHTML = res.data.map(item => `<option value="${item.articulo}">${item.descripcion || ''}</option>`).join('');
+                datalist.innerHTML = res.data.map(item => `
+                    <option value="${item.articulo}" data-cod="${item.reg_local}" data-desc="${item.descripcion || ''}" data-tipo="${item.sub_rubro || ''}" data-uni="${item.unidad || ''}">
+                        [${item.reg_local}] ${item.descripcion || ''}
+                    </option>
+                `).join('');
             }
         } catch (err) {
             console.error(err);
@@ -1179,6 +1184,17 @@ const ModuloInsumos = {
         const comboDepo = document.getElementById('i_depo_select')?.value || '';
         const [depositoNombre, localidadVal] = comboDepo ? comboDepo.split('|') : ['', ''];
 
+        const artNombre = (document.getElementById('i_art').value || '').trim().toUpperCase();
+        let codArt = document.getElementById('i_cod_articulo')?.value || '';
+        let tipoInsumo = '';
+
+        // Buscar coincidencia en catálogo si no tiene código directo
+        const matchMaestro = this.parametrosInsumos.find(m => (m.articulo || '').trim().toUpperCase() === artNombre);
+        if (matchMaestro) {
+            codArt = matchMaestro.reg_local;
+            tipoInsumo = matchMaestro.sub_rubro || matchMaestro.descripcion || '';
+        }
+
         const registro = {
             fecha: document.getElementById('i_fecha').value,
             remito: document.getElementById('i_remito').value,
@@ -1186,14 +1202,16 @@ const ModuloInsumos = {
             localidad: localidadVal,
             proveedor: (document.getElementById('i_prov_select')?.value || '').toUpperCase(),
             recibio: document.getElementById('i_reci').value.toUpperCase(),
-            articulo: document.getElementById('i_art').value.toUpperCase(),
+            articulo: artNombre,
             descripcion: document.getElementById('i_desc').value.toUpperCase(),
             unidad: document.getElementById('i_uni').value.toUpperCase(),
             cant: parseFloat(document.getElementById('i_cant').value) || 0,
             envase_x: parseFloat(document.getElementById('i_env_x').value) || 1,
             total: parseFloat(document.getElementById('i_total').value) || 0,
             imp_uni: parseFloat(document.getElementById('i_imp_u').value) || 0,
-            importe_total: parseFloat(document.getElementById('i_imp_t').value) || 0
+            importe_total: parseFloat(document.getElementById('i_imp_t').value) || 0,
+            cod_articulo: codArt || null,
+            tipo_insumo: tipoInsumo || null
         };
 
         if (!registro.fecha || !registro.campo_depo || !registro.articulo || registro.total <= 0) {
@@ -1208,23 +1226,23 @@ const ModuloInsumos = {
 
         try {
             if (regLocalId) {
-                const sqlUpdate = `UPDATE insumos_ingresos SET fecha=?, remito=?, campo_depo=?, localidad=?, proveedor=?, recibio=?, articulo=?, descripcion=?, unidad=?, cant=?, envase_x=?, total=?, imp_uni=?, importe_total=?, sincronizado=0 WHERE reg_local=?`;
+                const sqlUpdate = `UPDATE insumos_ingresos SET fecha=?, remito=?, campo_depo=?, localidad=?, proveedor=?, recibio=?, articulo=?, descripcion=?, unidad=?, cant=?, envase_x=?, total=?, imp_uni=?, importe_total=?, cod_articulo=?, tipo_insumo=?, sincronizado=0 WHERE reg_local=?`;
                 await this.m_ejecutarSqlLocal(sqlUpdate, [
                     registro.fecha, registro.remito, registro.campo_depo, registro.localidad,
                     registro.proveedor, registro.recibio, registro.articulo, registro.descripcion,
                     registro.unidad, registro.cant, registro.envase_x, registro.total,
-                    registro.imp_uni, registro.importe_total, String(regLocalId)
+                    registro.imp_uni, registro.importe_total, registro.cod_articulo, registro.tipo_insumo, String(regLocalId)
                 ]);
             } else {
                 const maxVal = await this.m_obtenerMaxRegLocal('insumos_ingresos');
                 registro.reg_local = String(maxVal + 1);
 
-                const sqlInsert = `INSERT INTO insumos_ingresos (reg_local, fecha, remito, campo_depo, localidad, proveedor, recibio, articulo, descripcion, unidad, cant, envase_x, total, imp_uni, importe_total, sincronizado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`;
+                const sqlInsert = `INSERT INTO insumos_ingresos (reg_local, fecha, remito, campo_depo, localidad, proveedor, recibio, articulo, descripcion, unidad, cant, envase_x, total, imp_uni, importe_total, cod_articulo, tipo_insumo, sincronizado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`;
                 await this.m_ejecutarSqlLocal(sqlInsert, [
                     registro.reg_local, registro.fecha, registro.remito, registro.campo_depo,
                     registro.localidad, registro.proveedor, registro.recibio, registro.articulo,
                     registro.descripcion, registro.unidad, registro.cant, registro.envase_x,
-                    registro.total, registro.imp_uni, registro.importe_total
+                    registro.total, registro.imp_uni, registro.importe_total, registro.cod_articulo, registro.tipo_insumo
                 ]);
             }
 

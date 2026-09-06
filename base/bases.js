@@ -270,6 +270,7 @@ function inicializarTablasLocales() {
                 costo_final_ha_dolar NUMERIC,
                 id INTEGER NOT NULL,
                 comentario TEXT,
+                cod_articulo TEXT,
                 estado TEXT,
                 sincronizado INTEGER DEFAULT 0,
                 PRIMARY KEY (reg_local, id)
@@ -303,6 +304,7 @@ function inicializarTablasLocales() {
                 campo_depo TEXT,
                 recibio TEXT,
                 proveedor TEXT,
+                cod_articulo TEXT,
                 articulo TEXT,
                 descripcion TEXT,
                 descripcion_1 TEXT,
