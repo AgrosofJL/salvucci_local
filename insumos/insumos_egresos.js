@@ -1,11 +1,4 @@
-﻿/**
- * ModuloEgresos: Gestión de Costos, Consumo de Insumos y Despachos Valorizados
- * Archivo: insumos_egresos.js
- * AgroSoft J&L - "Apple Soft Studio" Edition / Tipografía Roboto
- * Mode: Local-First (Engine SQLite IPC) + "No me quites nada" + Max(registro)+1 + sincronizado = 0
- */
 
-// Helper universal de normalización para evitar fallos por espacios o tildes
 const _normalizarTextoEgr = (txt) => (txt || '').toString().replace(/\s+/g, ' ').trim().toUpperCase();
 
 const ModuloEgresos = {
@@ -48,80 +41,51 @@ const ModuloEgresos = {
     },
 
     m_asegurarModalBase: function() {
-        let modal = document.getElementById('modal-agrosoft');
-        if (!modal) {
-            const modalHTML = `
-                <div id="modal-agrosoft" class="modal-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(18, 22, 28, 0.48); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); z-index: 99999; justify-content: center; align-items: center; padding: 20px; box-sizing: border-box;">
-                    <div class="modal-apple-content" style="background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 14px; padding: 24px; width: 95%; max-width: 760px; max-height: 90vh; color: #1D1D1F; box-shadow: 0 10px 25px rgba(0,0,0,0.15); display: flex; flex-direction: column; position: relative;">
-                        <div class="modal-header-apple" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #E0DCD4; padding-bottom: 12px; flex-shrink: 0;">
-                            <h3 id="modal-titulo" style="margin: 0; font-size: 1.15rem; font-weight: 800; font-family: 'Roboto', sans-serif; color: #123F2C; letter-spacing: -0.3px;">VALORIZACIÓN DE EGRESO</h3>
-                            <button onclick="ModuloEgresos.m_cerrarModal()" style="background: none; border: none; color: #6E6E73; font-size: 1.5rem; font-weight:bold; cursor: pointer;">&times;</button>
-                        </div>
-                        <div id="modal-formulario" style="max-height: 72vh; overflow-y: auto; padding-right: 4px;"></div>
-                    </div>
-                </div>`;
-            document.body.insertAdjacentHTML('beforeend', modalHTML);
-        }
+        AgroUI.asegurarModal(() => this.m_cerrarModal());
     },
 
     m_notificarAlerta: function(mensaje, tipo = 'alerta') {
-        const colorBorde = tipo === 'exito' ? '#1FA958' : tipo === 'error' ? '#E0342A' : '#E08600';
-        const icono = tipo === 'exito' ? '✅' : tipo === 'error' ? '❌' : '⚠️';
-
-        const toastHTML = `
-            <div id="apple-toast-premium" style="position: fixed; top: 30px; left: 50%; transform: translateX(-50%); background: #FFFFFF; border-left: 4px solid ${colorBorde}; border-top: 1px solid #E0DCD4; border-bottom: 1px solid #E0DCD4; border-right: 1px solid #E0DCD4; border-radius: 14px; padding: 12px 22px; display: flex; align-items: center; gap: 12px; color: #1D1D1F; font-family: 'Roboto', sans-serif; font-size: 0.85rem; font-weight: 600; box-shadow: 0 6px 16px rgba(20,26,36,0.12); z-index: 100000;">
-                <span style="font-size: 1.1rem;">${icono}</span>
-                <div>${mensaje}</div>
-            </div>
-        `;
-        document.getElementById('apple-toast-premium')?.remove();
-        document.body.insertAdjacentHTML('beforeend', toastHTML);
-
-        setTimeout(() => {
-            const el = document.getElementById('apple-toast-premium');
-            if (el) {
-                el.style.transition = "all 0.4s ease";
-                el.style.opacity = "0";
-                el.style.transform = "translate(-50%, -20px) scale(0.95)";
-                setTimeout(() => el.remove(), 400);
-            }
-        }, 3500);
+        AgroUI.notificar(mensaje, tipo);
     },
 
     m_cerrarModal: function() {
-        const modal = document.getElementById('modal-agrosoft');
-        if (modal) modal.style.display = 'none';
+        AgroUI.cerrarModal();
+        AgroUI.anchoModal(860);
     },
 
     m_inicializar: async function() {
         const visor = document.getElementById('pantalla-dinamica');
         if (!visor) return;
-        visor.innerHTML = `<div class="loader-apple" style="font-family:'Roboto', sans-serif; text-align:center; padding:50px; color:#1E6B4C; font-weight:500;">Calculando existencias y costos de egresos desde base Local...</div>`;
+        AgroUI.asegurarEstilos();
+        if (!visor.querySelector('.agro-page')) visor.innerHTML = AgroUI.cargando('Calculando existencias y egresos…');
 
         try {
-            const [resEgr, resIng, resGastos, resCuadros, resIns] = await Promise.all([
-                this.m_ejecutarSqlLocal(`SELECT * FROM egresos_insumos ORDER BY fecha DESC`),
+            const segura = async (sql) => { try { return AgroUI.filas(await this.m_ejecutarSqlLocal(sql)); } catch (e) { return []; } };
+            const [resEgr, resIng, resGastos, resCampos, resIns, resCuadros] = await Promise.all([
+                this.m_ejecutarSqlLocal(`SELECT * FROM egresos_insumos ORDER BY fecha DESC, id DESC`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM insumos_ingresos`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM tipos_gastos ORDER BY nombre_gasto ASC`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM campos ORDER BY establecimiento ASC`),
-                this.m_ejecutarSqlLocal(`SELECT reg_local, articulo, sub_rubro, descripcion, unidad_medida FROM insumos`)
+                this.m_ejecutarSqlLocal(`SELECT reg_local, articulo, sub_rubro, descripcion, unidad_medida FROM insumos`),
+                segura(`SELECT * FROM cuadros ORDER BY establecimiento, campo, CAST(lote AS INTEGER)`)
             ]);
 
-            this.datosEgresos = resEgr.data || resEgr || [];
-            this.datosIngresos = resIng.data || resIng || [];
-            this.parametros.gastos = resGastos.data || resGastos || [];
-            this.parametros.cuadros = resCuadros.data || resCuadros || [];
-            this.parametros.insumosMaestros = resIns.data || resIns || [];
+            this.datosEgresos = AgroUI.filas(resEgr);
+            this.datosIngresos = AgroUI.filas(resIng);
+            this.parametros.gastos = AgroUI.filas(resGastos);
+            this.parametros.cuadros = AgroUI.filas(resCampos);
+            this.parametros.insumosMaestros = AgroUI.filas(resIns);
+            // Destinos: tabla cuadros (nueva) + campos (formato anterior)
+            this.parametros.destinos = AgroUI.destinosCuadros(resCuadros, this.parametros.cuadros);
 
             this.m_consolidarMatrizStock();
             this.m_dibujarEstructura();
         } catch (err) {
             console.error("❌ Error en Egresos Local AgroSoft:", err);
-            visor.innerHTML = `<div style="color:#E0342A; padding:20px; font-family:'Roboto';">Error al cargar datos locales: ${err.message}</div>`;
+            visor.innerHTML = AgroUI.errorPantalla('No se pudieron cargar los egresos', err, 'ModuloEgresos.m_inicializar()');
         }
     },
 
-    // Consolidación de stock unificada por cod_articulo y depósito
     m_consolidarMatrizStock: function() {
         const mapaBalance = {};
         const mapaMaestro = new Map();
@@ -131,6 +95,7 @@ const ModuloEgresos = {
             if (m.articulo) mapaMaestro.set(_normalizarTextoEgr(m.articulo), m);
         });
 
+        // 1. Sumar ingresos por depósito
         this.datosIngresos.forEach(ing => {
             const est = _normalizarTextoEgr(ing.establecimiento || 'SIN CAMPO');
             const depo = _normalizarTextoEgr(ing.campo_depo || 'GENERAL');
@@ -156,8 +121,10 @@ const ModuloEgresos = {
             mapaBalance[key].ingresos += parseFloat(ing.total || ing.cant || 0);
         });
 
+        // 2. Restar consumos por depósito
         this.datosEgresos.forEach(egr => {
-            if ((egr.estado || 'ACTIVO').toUpperCase() !== 'ACTIVO') return;
+            const estadoNorm = (egr.estado || 'ACTIVO').trim().toUpperCase();
+            if (estadoNorm === 'CANCELADO' || estadoNorm === 'ANULADO') return;
             
             const depo = _normalizarTextoEgr(egr.deposito_origen || 'GENERAL');
             const codDirecto = (egr.cod_articulo || '').trim();
@@ -195,7 +162,7 @@ const ModuloEgresos = {
 
     m_filtrarBusqueda: function(val) {
         this.filtroBusquedaTxt = val || '';
-        this.m_dibujarEstructura();
+        AgroUI.conservarFoco('buscador-egresos', () => this.m_dibujarEstructura());
     },
 
     m_limpiarFiltros: function() {
@@ -206,6 +173,7 @@ const ModuloEgresos = {
         this.m_dibujarEstructura();
     },
 
+    // Búsqueda segura y completa que no oculta las ventas recién creadas
     m_obtenerEgresosFiltrados: function() {
         return this.datosEgresos.filter(e => {
             if (this.filtroOrigenActual && this.filtroOrigenActual !== 'GLOBAL') {
@@ -226,14 +194,14 @@ const ModuloEgresos = {
             if (this.filtroBusquedaTxt) {
                 const txt = this.filtroBusquedaTxt.toLowerCase();
                 const insumoMatch = (e.insumo || '').toLowerCase().includes(txt);
-                const codMatch = (e.cod_articulo || '').toLowerCase().includes(txt);
+                const codMatch = String(e.cod_articulo || '').toLowerCase().includes(txt);
                 const laborMatch = (e.labor || e.tipo_labor || '').toLowerCase().includes(txt);
                 const contratistaMatch = (e.contratista || '').toLowerCase().includes(txt);
                 const centroMatch = (e.centro_costo || '').toLowerCase().includes(txt);
                 const depMatch = (e.deposito_origen || '').toLowerCase().includes(txt);
                 const estMatch = (e.establecimiento || '').toLowerCase().includes(txt);
-                const cuadroMatch = String(e.cuadro || '').toLowerCase().includes(txt);
-                if (!insumoMatch && !codMatch && !laborMatch && !contratistaMatch && !centroMatch && !depMatch && !estMatch && !cuadroMatch) return false;
+                const remitoMatch = String(e.remito || e.orden_trab || '').toLowerCase().includes(txt);
+                if (!insumoMatch && !codMatch && !laborMatch && !contratistaMatch && !centroMatch && !depMatch && !estMatch && !remitoMatch) return false;
             }
             return true;
         });
@@ -252,295 +220,188 @@ const ModuloEgresos = {
         const totalUsd = datos.reduce((acc, curr) => acc + (Number(curr.total_dolar || curr.costo_final) || 0), 0);
         const totalPesos = datos.reduce((acc, curr) => acc + (Number(curr.total_pesos) || 0), 0);
         const totalConsumo = datos.reduce((acc, curr) => acc + (Number(curr.total_consumo) || 0), 0);
-        const totalHasUso = datos.reduce((acc, curr) => acc + (Number(curr.sup_uso) || 0), 0);
+        const totalSuperficie = datos.reduce((acc, curr) => acc + (Number(curr.sup_uso) || 0), 0);
+        const destinos = new Set(datos.map(e => AgroUI.norm(e.establecimiento)).filter(Boolean)).size;
 
-        const origenesDisponibles = ['GLOBAL', ...new Set(this.datosEgresos.map(e => (e.tabla_origen || 'DESPACHO_STOCK').toUpperCase()).filter(Boolean))];
+        const conteoOrigen = {};
+        this.datosEgresos.forEach(e => {
+            const o = (e.tabla_origen || 'DESPACHO_STOCK').toUpperCase();
+            conteoOrigen[o] = (conteoOrigen[o] || 0) + 1;
+        });
         const establecimientos = [...new Set(this.datosEgresos.map(e => (e.establecimiento || '').toUpperCase()).filter(Boolean))].sort();
 
+        const conteoDepo = {};
+        this.datosEgresos.forEach(e => {
+            const d = _normalizarTextoEgr(e.deposito_origen);
+            if (d) conteoDepo[d] = (conteoDepo[d] || 0) + 1;
+        });
         const depositosDisponibles = [...new Set([
             ...this.datosIngresos.map(i => _normalizarTextoEgr(i.campo_depo)),
-            ...this.datosEgresos.map(e => _normalizarTextoEgr(e.deposito_origen))
+            ...Object.keys(conteoDepo)
         ].filter(Boolean))].sort();
 
+        const hayFiltros = this.filtroOrigenActual !== 'GLOBAL' || this.filtroDepositoActual !== 'TODO' || this.filtroEstablecimientoActual || this.filtroBusquedaTxt;
+        const nombreOrigen = (o) => o === 'GLOBAL' ? 'Todos' : o.replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase());
+
         visor.innerHTML = `
-            <style>
-                :root {
-                    --color-bg: #F5F4F1;
-                    --color-surface: #FFFFFF;
-                    --color-text: #211C16;
-                    --color-text-secondary: #6B6255;
-                    --color-border: #E0DCD4;
-                    --color-plant: #1E6B4C;
-                    --color-plant-dark: #123F2C;
-                    --color-plant-soft: rgba(30, 107, 76, 0.10);
-                    --radius-lg: 16px;
-                    --radius-md: 12px;
-                }
+            <div class="agro-page animated fadeIn">
+                ${AgroUI.volverHTML('INSUMOS')}
 
-                .egresos-layout-full { 
-                    font-family: 'Roboto', sans-serif; 
-                    color: var(--color-text); 
-                    padding: 8px 18px 25px 18px; 
-                    width: 100%;
-                    box-sizing: border-box;
-                    height: calc(100vh - 65px);
-                    display: flex;
-                    flex-direction: column;
-                    overflow: hidden;
-                    gap: 8px;
-                }
+                ${AgroUI.cabecera({
+                    titulo: 'Egresos de insumos',
+                    subtitulo: 'Despachos valorizados desde galpón hacia establecimientos, cuadros y labores',
+                    acciones: [
+                        { texto: 'Excel', icono: 'file-spreadsheet', onclick: 'ModuloEgresos.m_exportarExcel()' },
+                        { texto: 'PDF', icono: 'file-text', onclick: 'ModuloEgresos.m_exportarPDF()' },
+                        { texto: 'Nuevo egreso', icono: 'plus', variante: 'primario', onclick: 'ModuloEgresos.m_abrirModalCreacion()' }
+                    ]
+                })}
 
-                .tabs-header-archivero-main {
-                    display: flex; gap: 8px; border-bottom: 2px solid var(--color-border); margin-bottom: 4px; align-items: flex-end;
-                    overflow-x: auto; flex-shrink: 0;
-                }
-                .tab-main-archivero {
-                    display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: #EAE8E1;
-                    border: 1.5px solid var(--color-border); border-bottom: none; border-radius: 12px 12px 0 0;
-                    font-size: 0.8rem; font-weight: 800; color: var(--color-text-secondary); cursor: pointer; transition: all 0.15s ease;
-                    position: relative; bottom: -2px; white-space: nowrap;
-                }
-                .tab-main-archivero:hover { background: #F0EEE8; color: var(--color-text); }
-                .tab-main-archivero.active {
-                    background: #FFFFFF; color: var(--color-plant-dark); border-color: var(--color-border); border-top: 3px solid var(--color-plant);
-                    box-shadow: 0 -2px 8px rgba(0,0,0,0.04);
-                }
-                .badge-tab-main {
-                    background: var(--color-plant-soft); color: var(--color-plant); padding: 2px 7px;
-                    border-radius: 12px; font-size: 0.68rem; font-weight: 800;
-                }
+                ${AgroUI.tabs([
+                    { clave: 'GLOBAL', texto: 'Todos', badge: AgroUI.num(this.datosEgresos.length) },
+                    ...Object.keys(conteoOrigen).sort().map(o => ({ clave: o, texto: nombreOrigen(o), badge: AgroUI.num(conteoOrigen[o]) }))
+                ], this.filtroOrigenActual, c => `ModuloEgresos.m_cambiarTabOrigen(${AgroUI.js(c)})`)}
 
-                /* CARPETAS / CARDS HORIZONTALES */
-                .folder-grid {
-                    display: flex; gap: 10px; overflow-x: auto; padding: 4px 2px 6px 2px; flex-shrink: 0;
-                }
-                .folder-card {
-                    min-width: 180px; background: #FFFFFF; border: 1.5px solid var(--color-border); border-radius: var(--radius-md);
-                    padding: 8px 12px; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 2px 5px rgba(0,0,0,0.03);
-                    display: flex; flex-direction: column; justify-content: center;
-                }
-                .folder-card:hover { border-color: var(--color-plant); transform: translateY(-2px); }
-                .folder-card.active { border-color: var(--color-plant); background: #F0FDF4; box-shadow: 0 2px 8px rgba(30,107,76,0.15); }
+                ${AgroUI.kpis([
+                    { label: 'Cantidad despachada', valor: AgroUI.num(totalConsumo, 1), unidad: 'uds', icono: 'package', tono: 'gris', sub: `${AgroUI.num(datos.length)} registro(s)` },
+                    { label: 'Superficie aplicada', valor: AgroUI.num(totalSuperficie, 1), unidad: 'ha', icono: 'map', tono: 'azul', sub: totalSuperficie > 0 ? `U$S ${AgroUI.num(totalUsd / totalSuperficie, 2)} por ha` : '' },
+                    { label: 'Valorización', valor: `U$S ${AgroUI.num(totalUsd, 2)}`, icono: 'dollar-sign', sub: `$ ${AgroUI.num(totalPesos, 2)}` },
+                    { label: 'Establecimientos destino', valor: AgroUI.num(destinos), icono: 'map-pin', tono: 'ambar' }
+                ])}
 
-                .folder-title { display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 800; color: var(--color-plant-dark); }
-                .folder-subtitle { font-size: 10px; color: var(--color-text-secondary); margin-top: 2px; font-weight: 600; }
+                ${depositosDisponibles.length > 0 ? AgroUI.chips([
+                    { clave: 'TODO', texto: 'Todos los galpones', cuenta: AgroUI.num(this.datosEgresos.length) },
+                    ...depositosDisponibles.map(d => ({ clave: d, texto: d, cuenta: AgroUI.num(conteoDepo[d] || 0), color: AgroUI.colorDe(d) }))
+                ], this.filtroDepositoActual, c => `ModuloEgresos.m_filtrarPorDeposito(${AgroUI.js(c)})`) : ''}
 
-                /* KPIS */
-                .grid-kpi-egr {
-                    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; flex-shrink: 0;
-                }
-                @media (max-width: 1100px) { .grid-kpi-egr { grid-template-columns: repeat(2, 1fr); } }
-
-                .kpi-card-egr {
-                    background: #FFFFFF; border: 1.5px solid var(--color-border); border-radius: var(--radius-md); padding: 10px 14px;
-                    display: flex; flex-direction: column; justify-content: space-between; gap: 2px;
-                    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.03);
-                }
-                .kpi-header-row { display: flex; justify-content: space-between; align-items: center; }
-                .kpi-card-egr .kpi-label { font-size: 0.62rem; color: var(--color-text-secondary); font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
-                .kpi-card-egr .kpi-value {
-                    font-size: 1.25rem; font-weight: 800; color: var(--color-text); margin: 0; line-height: 1.15; letter-spacing: -0.3px;
-                }
-                .kpi-subtext { font-size: 0.68rem; color: #8E8E93; font-weight: 500; margin-top: 2px; display: block; }
-
-                .kpi-card-egr.accent-neutral { border-left: 4px solid #4B4F56; }
-                .kpi-card-egr.accent-blue { border-left: 4px solid #0071E3; }
-                .kpi-card-egr.accent-green { border-left: 4px solid #1E6B4C; }
-                .kpi-card-egr.accent-orange { border-left: 4px solid #E08600; }
-
-                /* PANEL FULL HEIGHT */
-                .panel-box-full {
-                    background: #FFFFFF; border: 1.5px solid var(--color-border); border-radius: var(--radius-lg);
-                    padding: 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.04);
-                    flex: 1; overflow: hidden;
-                }
-                .wrapper-tabla-scroll-full {
-                    flex: 1; overflow-y: auto; overflow-x: auto; border: 1px solid var(--color-border);
-                    border-radius: 10px; background: #FFFFFF; position: relative;
-                }
-
-                .tabla-cuadros-plant { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-                .tabla-cuadros-plant th {
-                    background: #123F2C; color: #FFFFFF; font-size: 0.68rem; font-weight: 700;
-                    text-transform: uppercase; padding: 10px 8px; text-align: left; letter-spacing: 0.4px;
-                    position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-                }
-                .tabla-cuadros-plant td { padding: 9px 8px; border-bottom: 1px solid var(--color-border); color: var(--color-text); vertical-align: middle; }
-                .tabla-cuadros-plant tbody tr:hover { background: #F8FAFC; }
-
-                .btn-accion-plant {
-                    background: var(--color-plant-soft); border: 1px solid rgba(30,107,76,0.25); color: var(--color-plant);
-                    padding: 4px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: 700; cursor: pointer;
-                    display: inline-flex; align-items: center; gap: 4px; transition: background 0.15s;
-                }
-                .btn-accion-plant:hover { background: rgba(30,107,76,0.2); }
-                .btn-delete-plant { background: rgba(224,52,42,0.1); border-color: rgba(224,52,42,0.25); color: #E0342A; }
-                .btn-delete-plant:hover { background: rgba(224,52,42,0.2); }
-            </style>
-
-            <div class="egresos-layout-full animated fadeIn">
-                ${ComponentesUI.botonVolverHTML('INSUMOS')}
-
-                <!-- HEADER SUPERIOR FULL-WIDTH -->
-                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; flex-shrink:0;">
-                    <div>
-                        <h2 style="margin:0; font-weight: 800; font-size: 1.3rem; letter-spacing: -0.5px; color:#123F2C;">Control de Costos y Egresos</h2>
-                        <p style="margin:2px 0 0 0; font-size:0.75rem; color:#6B6255;">Despachos valorizados, consumo de insumos y servicios de labor (Base Local)</p>
-                    </div>
-
-                    <div style="display:flex; gap:8px; align-items:center;">
-                        <button onclick="ModuloEgresos.m_exportarExcel()" style="background:#1FA958; color:#FFF; border:none; padding:7px 14px; border-radius:8px; font-size:0.75rem; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:5px;">
-                            <i data-lucide="file-spreadsheet" style="width:13px; height:13px;"></i> Excel
-                        </button>
-                        <button onclick="ModuloEgresos.m_exportarPDF()" style="background:#E0342A; color:#FFF; border:none; padding:7px 14px; border-radius:8px; font-size:0.75rem; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:5px;">
-                            <i data-lucide="file-text" style="width:13px; height:13px;"></i> PDF Reporte
-                        </button>
-                        <button onclick="ModuloEgresos.m_abrirModalCreacion()" style="background:#1E6B4C; color:#FFF; border:none; padding:7px 16px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer; display:flex; align-items:center; gap:6px;">
-                            <i data-lucide="plus-circle" style="width:13px; height:13px;"></i> NUEVO EGRESO
-                        </button>
-                    </div>
+                <div class="agro-toolbar">
+                    ${AgroUI.buscador({ id: 'buscador-egresos', valor: this.filtroBusquedaTxt, placeholder: 'Buscar remito, insumo, labor, contratista, centro de costo…', oninput: 'ModuloEgresos.m_filtrarBusqueda(this.value)' })}
+                    <select onchange="ModuloEgresos.m_filtrarPorEstablecimiento(this.value)">
+                        <option value="">Todos los establecimientos</option>
+                        ${establecimientos.map(e => `<option value="${AgroUI.esc(e)}" ${this.filtroEstablecimientoActual === e ? 'selected' : ''}>${AgroUI.esc(e)}</option>`).join('')}
+                    </select>
+                    ${hayFiltros ? `<button class="agro-limpiar" onclick="ModuloEgresos.m_limpiarFiltros()">✕ Limpiar filtros</button>` : ''}
                 </div>
 
-                <!-- TABS ARCHIVERO SUPERIOR POR ORIGEN -->
-                <div class="tabs-header-archivero-main">
-                    ${origenesDisponibles.map(orig => {
-                        const esActivo = this.filtroOrigenActual === orig;
-                        const labelTxt = orig === 'GLOBAL' ? 'GLOBAL (TODOS)' : orig.replace(/_/g, ' ');
-                        const count = orig === 'GLOBAL' 
-                            ? this.datosEgresos.length 
-                            : this.datosEgresos.filter(e => (e.tabla_origen || 'DESPACHO_STOCK').toUpperCase() === orig).length;
-                        return `
-                            <div class="tab-main-archivero ${esActivo ? 'active' : ''}" onclick="ModuloEgresos.m_cambiarTabOrigen('${orig}')">
-                                <span>${labelTxt}</span>
-                                <span class="badge-tab-main">${count}</span>
-                            </div>
-                        `;
-                    }).join('')}
-                </div>
-
-                <!-- CARPETAS HORIZONTALES POR DEPÓSITO DE ORIGEN -->
-                <div class="folder-grid scroll-apple">
-                    <div class="folder-card ${this.filtroDepositoActual === 'TODO' ? 'active' : ''}" onclick="ModuloEgresos.m_filtrarPorDeposito('TODO')">
-                        <div class="folder-title">
-                            <span>🏢 TODOS LOS ALMACENES</span>
-                            <span style="color:#1E6B4C;">${this.datosEgresos.length}</span>
-                        </div>
-                        <div class="folder-subtitle">Salidas generales consolidadas</div>
+                <div class="agro-panel">
+                    <div class="agro-panel-cab">
+                        <span class="titulo">Registro de egresos valorizados</span>
+                        <span class="meta">${AgroUI.num(datos.length)} registro(s)</span>
                     </div>
-                    ${depositosDisponibles.map(dep => {
-                        const cantMovs = this.datosEgresos.filter(e => _normalizarTextoEgr(e.deposito_origen) === dep).length;
-                        return `
-                            <div class="folder-card ${this.filtroDepositoActual === dep ? 'active' : ''}" onclick="ModuloEgresos.m_filtrarPorDeposito('${dep}')">
-                                <div class="folder-title">
-                                    <span>🏢 ${dep}</span>
-                                    <span style="color:#1E6B4C;">${cantMovs} movs</span>
-                                </div>
-                                <div class="folder-subtitle">Egresos desde este galpón</div>
-                            </div>
-                        `;
-                    }).join('')}
-                </div>
-
-            
-                <!-- BARRA DE BÚSQUEDA Y FILTROS -->
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:2px; flex-wrap:wrap; flex-shrink:0;">
-                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                        <input type="text" id="buscador-egresos" placeholder="🔍 Buscar código, insumo, labor, lote, centro de costo..." value="${this.filtroBusquedaTxt}" oninput="ModuloEgresos.m_filtrarBusqueda(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; min-width:320px;">
-                        
-                        <select onchange="ModuloEgresos.m_filtrarPorEstablecimiento(this.value)" style="padding:6px 12px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.78rem; outline:none; background:#FFFFFF; font-weight:600; cursor:pointer;">
-                            <option value="">📍 Todos los Establecimientos</option>
-                            ${establecimientos.map(e => `<option value="${e}" ${this.filtroEstablecimientoActual === e ? 'selected' : ''}>${e.toUpperCase()}</option>`).join('')}
-                        </select>
-                    </div>
-
-                    ${(this.filtroOrigenActual !== 'GLOBAL' || this.filtroDepositoActual !== 'TODO' || this.filtroEstablecimientoActual || this.filtroBusquedaTxt) ? `
-                        <button onclick="ModuloEgresos.m_limpiarFiltros()" style="background:rgba(224,52,42,0.1); border:1px solid rgba(224,52,42,0.25); color:#E0342A; padding:5px 12px; border-radius:6px; font-size:0.72rem; font-weight:700; cursor:pointer;">
-                            ✕ Limpiar Filtros
-                        </button>
-                    ` : ''}
-                </div>
-
-                <!-- CONTENEDOR FULL-HEIGHT CON TABLA EXPANDIDA -->
-                <div class="panel-box-full">
-                    <div style="display:flex; justify-content:space-between; align-items:center; flex-shrink:0;">
-                        <span style="font-size:0.75rem; font-weight:800; color:#123F2C; text-transform:uppercase; letter-spacing:0.4px;">
-                            📋 Registro de Egresos y Salidas Valorizadas (${datos.length})
-                        </span>
-                        <span style="font-size:0.72rem; color:#6B6255; font-weight:600;">Filas completas en tiempo real</span>
-                    </div>
-
-                    <div class="wrapper-tabla-scroll-full scroll-apple">
-                        <table class="tabla-cuadros-plant">
+                    <div class="agro-scroll scroll-apple">
+                        <table class="agro-tabla">
                             <thead>
                                 <tr>
-                                    <th style="width: 85px;">Fecha</th>
-                                    <th>Origen Tabla</th>
+                                    <th>Fecha</th>
+                                    <th>Origen</th>
                                     <th>Insumo / Concepto</th>
-                                    <th>Labor / Aplicación</th>
-                                    <th>Destino Técnico</th>
-                                    <th style="text-align: right; width: 90px;">Consumo</th>
-                                    <th style="text-align: right; width: 100px;">Unit. U$S</th>
-                                    <th style="text-align: right; width: 105px;">Costo Ha U$S</th>
-                                    <th style="text-align: right; width: 110px;">Total U$S</th>
-                                    <th style="text-align: center; width: 75px;">Acciones</th>
+                                    <th>Labor</th>
+                                    <th>Destino</th>
+                                    <th class="der">Cantidad</th>
+                                    <th class="der">Unit. U$S</th>
+                                    <th class="der">Total U$S</th>
+                                    <th class="cen">Remito</th>
+                                    <th></th>
                                 </tr>
                             </thead>
-                            <tbody>
-                                ${this.m_renderFilasMegaTabla(datos)}
-                            </tbody>
+                            <tbody>${this.m_renderFilasMegaTabla(datos)}</tbody>
+                            ${datos.length ? `<tfoot><tr><td colspan="7">Total valorizado</td><td class="der num">U$S ${AgroUI.num(totalUsd, 2)}</td><td colspan="2"></td></tr></tfoot>` : ''}
                         </table>
                     </div>
                 </div>
-
             </div>
         `;
-        if (window.lucide) lucide.createIcons();
+        AgroUI.iconos();
     },
 
     m_renderFilasMegaTabla: function(datos) {
-        if (datos.length === 0) {
-            return `<tr><td colspan="10" style="text-align:center; padding:35px; color:#9AA0A6; font-style:italic;">No se encontraron registros de egreso para los filtros seleccionados.</td></tr>`;
-        }
+        if (datos.length === 0) return AgroUI.filaVacia(10, 'No hay egresos para los filtros seleccionados.');
 
         return datos.map(e => {
-            const origenLabel = (e.tabla_origen || 'DESPACHO_STOCK').toUpperCase().replace(/_/g, ' ');
-            const colorTag = this._m_obtenerColorGrupo(e.tabla_origen || 'DESPACHO_STOCK');
+            const origen = (e.tabla_origen || 'DESPACHO_STOCK').toUpperCase();
+            const tieneFotoRemito = e.foto_remito && String(e.foto_remito).trim() !== '';
+            const esNoDeclarado = (e.despacho || '').toUpperCase() === 'NO DECLARADO';
+            const numRemito = e.remito || e.orden_trab || e.id;
+            const depo = e.deposito_origen || '';
+            const args = `${AgroUI.js(e.reg_local)}, ${Number(e.id) || 0}`;
 
             return `
                 <tr>
-                    <td style="white-space:nowrap; font-weight:600;">${e.fecha || '-'}</td>
-                    <td style="white-space:nowrap;">
-                        <span style="background:${colorTag.bg}; color:${colorTag.txt}; border:1px solid ${colorTag.txt}33; padding:2px 7px; border-radius:6px; font-weight:800; font-size:0.68rem;">
-                            ${origenLabel}
-                        </span>
-                    </td>
+                    <td class="num">${AgroUI.sync(e.sincronizado)}${AgroUI.esc(e.fecha || '-')}</td>
+                    <td>${AgroUI.badgeColor(origen.replace(/_/g, ' '), AgroUI.colorDe(origen))}</td>
                     <td>
-                        <strong>${e.insumo || 'S/I'}</strong>
-                        ${e.cod_articulo ? `<div style="font-size:0.68rem; color:#0071E3; font-family:monospace; font-weight:bold;">COD: ${e.cod_articulo}</div>` : ''}
-                        ${e.centro_costo ? `<small style="color:#6B6255;">CC: ${e.centro_costo}</small>` : ''}
+                        <span class="fuerte">${AgroUI.esc(e.insumo || 'S/I')}</span>
+                        <span class="sub">${[e.cod_articulo ? `Cód. ${AgroUI.esc(e.cod_articulo)}` : '', e.centro_costo ? `CC: ${AgroUI.esc(e.centro_costo)}` : ''].filter(Boolean).join(' · ')}</span>
                     </td>
-                    <td><span style="background:#F0F2F5; color:#1D1D1F; padding:2px 6px; border-radius:4px; font-size:0.72rem; font-weight:600;">${e.labor || e.tipo_labor || '-'}</span></td>
+                    <td>${AgroUI.esc(e.labor || e.tipo_labor || '—')}</td>
                     <td>
-                        <strong>${(e.establecimiento || '—').toUpperCase()}</strong>
-                        <div style="font-size:0.7rem; color:#6B6255;">${e.campo ? e.campo + ' · ' : ''}Cuadro: ${e.cuadro || 'Gral'}</div>
+                        <span class="fuerte">${AgroUI.esc((e.establecimiento || '—').toUpperCase())}</span>
+                        <span class="sub">${e.campo ? AgroUI.esc(e.campo) + ' · ' : ''}Cuadro ${AgroUI.esc(e.cuadro || 'Gral')}${depo ? ` · desde <span class="agro-dot" style="background:${AgroUI.colorDe(depo)}; margin:0 3px 0 2px;"></span>${AgroUI.esc(depo)}` : ''}</span>
                     </td>
-                    <td style="text-align: right; font-weight: 800; color: #E0342A; font-family:monospace;">-${Number(e.total_consumo || 0).toLocaleString('es-AR')}</td>
-                    <td style="text-align: right; font-family:monospace; color:#6B6255;">U$S ${Number(e.imp_uni || 0).toFixed(2)}</td>
-                    <td style="text-align: right; font-weight: 800; color: #0071E3; font-family:monospace;">U$S ${Number(e.costo_final_ha_dolar || 0).toFixed(2)}</td>
-                    <td style="text-align: right; font-weight: 800; color: #1FA958; font-family:monospace;">U$S ${Number(e.total_dolar || e.costo_final || 0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
-                    <td style="text-align: center; white-space:nowrap;">
-                        <div style="display:inline-flex; gap:4px; align-items:center;">
-                            <button class="btn-accion-plant" onclick="ModuloEgresos.m_abrirModalEdicion('${e.reg_local}', ${e.id})" title="Editar Valorización">
-                                ✏️
-                            </button>
-                            <button class="btn-accion-plant btn-delete-plant" onclick="ModuloEgresos.m_solicitarBorrado('${e.reg_local}', ${e.id}, '${e.insumo}')" title="Revertir Egreso">
-                                🗑️
-                            </button>
-                        </div>
+                    <td class="der num fuerte agro-negativo">−${AgroUI.num(e.total_consumo, 2)}</td>
+                    <td class="der num sec">${AgroUI.num(e.imp_uni, 2)}</td>
+                    <td class="der num fuerte">${AgroUI.num(e.total_dolar || e.costo_final, 2)}</td>
+                    <td class="cen num">
+                        <b>#${AgroUI.esc(numRemito)}</b>
+                        ${esNoDeclarado ? `<span class="sub agro-ambar" style="font-weight:800;">No declarado</span>` : ''}
                     </td>
-                </tr>
-            `;
+                    <td class="acciones">
+                        ${tieneFotoRemito
+                            ? AgroUI.iconBtn({ icono: 'paperclip', titulo: 'Ver remito adjunto', onclick: `ModuloEgresos.m_verAdjuntoRemito(${AgroUI.js(e.foto_remito)})` })
+                            : AgroUI.iconBtn({ icono: 'printer', titulo: 'Generar remito PDF', onclick: `ModuloEgresos.m_emitirRemitoPdfCorporativo(${args})` })}
+                        ${AgroUI.iconBtn({ icono: 'pencil', titulo: 'Editar valorización', onclick: `ModuloEgresos.m_abrirModalEdicion(${args})` })}
+                        ${AgroUI.iconBtn({ icono: 'trash-2', titulo: 'Revertir egreso', peligro: true, onclick: `ModuloEgresos.m_solicitarBorrado(${args}, ${AgroUI.js(e.insumo)})` })}
+                    </td>
+                </tr>`;
         }).join('');
+    },
+
+    m_verAdjuntoRemito: function(ruta) {
+        if (!ruta) return;
+        if (ruta.startsWith('data:') || ruta.startsWith('http')) {
+            window.open(ruta, '_blank');
+        } else if (window.electronAPI && window.electronAPI.invoke) {
+            window.electronAPI.invoke('abrir-archivo-local', ruta);
+        } else {
+            window.open(ruta, '_blank');
+        }
+    },
+
+    m_emitirRemitoPdfCorporativo: function(regOrObjeto, id = null) {
+        // Acepta el registro completo (uso anterior) o reg_local + id
+        const e = (regOrObjeto && typeof regOrObjeto === 'object')
+            ? regOrObjeto
+            : this.datosEgresos.find(x => String(x.reg_local) === String(regOrObjeto) && (!id || Number(x.id) === Number(id)));
+        if (!e) return this.m_notificarAlerta('No se encontró el egreso.', 'error');
+
+        if (window.ServicioWhatsAppRemitos && typeof window.ServicioWhatsAppRemitos.generarYDescargarPDF === 'function') {
+            window.ServicioWhatsAppRemitos.generarYDescargarPDF({
+                id: e.id,
+                registro: e.reg_local,
+                remito: e.remito || e.orden_trab || e.id,
+                fecha: e.fecha || new Date().toLocaleDateString('es-AR'),
+                hora: e.hora || '',
+                cliente: e.cliente || e.establecimiento || 'CONSUMO INTERNO',
+                chofer: e.chofer || e.contratista || 'LOGÍSTICA PROPIA',
+                patente_1: e.patente_1 || '-',
+                patente_2: e.patente_2 || '-',
+                kilos: e.total_consumo || 0,
+                cant_recepcionada: e.total_consumo || 0,
+                establecimiento: e.establecimiento || 'CENTRAL',
+                razon_emisora: e.razon_emisora || e.establecimiento || 'PROPIO',
+                razon_origen: e.deposito_origen || 'DEPÓSITO CENTRAL',
+                cultivo: e.insumo || 'INSUMO QUÍMICO / FORRAJE',
+                campaña: e.campaña || '2025/2026',
+                deposito: e.deposito_origen,
+                despacho: e.despacho || 'NO DECLARADO',
+                imp_uni_dolar: e.imp_uni || 0,
+                cotizacion: e.cotizacion || 1200,
+                iva: e.iva || 21,
+                imp_total_ars: e.total_pesos || 0
+            });
+        } else {
+            this.m_notificarAlerta('El generador de remitos PDF no está cargado en esta pantalla.', 'alerta');
+        }
     },
 
     m_abrirModalCreacion: function() {
@@ -551,9 +412,10 @@ const ModuloEgresos = {
         if (modal) modal.style.display = 'flex';
 
         document.getElementById('modal-titulo').innerText = "NUEVO DESPACHO VALORIZADO DE INSUMOS";
+        AgroUI.anchoModal(900);
         
         const estDisponibles = [...new Set(this.listaStocksCalculados.filter(s => s.disponible > 0).map(s => s.establecimiento))];
-        const estDestinosUnicos = [...new Set(this.parametros.cuadros.map(c => c.establecimiento).filter(Boolean))];
+        const estDestinosUnicos = [...new Set([...(this.parametros.destinos || []).map(d => d.establecimiento), ...this.parametros.cuadros.map(c => c.establecimiento)].map(e => (e || '').toString().trim().toUpperCase()).filter(Boolean))].sort();
 
         container.innerHTML = `
             <div style="display:flex; flex-direction:column; gap:12px; font-family:'Roboto', sans-serif;">
@@ -562,20 +424,20 @@ const ModuloEgresos = {
                         <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Origen: Establecimiento</label>
                         <select id="e_est" onchange="ModuloEgresos.m_onCreacionEstablecimientoChange(this.value)" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; background:#FFFFFF;">
                             <option value="">Seleccione origen...</option>
-                            ${estDisponibles.map(e => `<option value="${e}">${e}</option>`).join('')}
+                            ${estDisponibles.map(e => `<option value="${AgroUI.esc(e)}">${AgroUI.esc(e === 'SIN CAMPO' ? 'Galpones generales' : e)}</option>`).join('')}
                         </select>
                     </div>
 
                     <div>
-                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Origen: Depósito</label>
+                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Origen: Depósito Físico</label>
                         <select id="e_dep_origen" onchange="ModuloEgresos.m_onCreacionDepositoChange(this.value)" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; background:#FFFFFF;">
                             <option value="">Esperando establecimiento...</option>
                         </select>
                     </div>
 
                     <div style="grid-column: 1 / -1;">
-                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Insumo con Existencia</label>
-                        <select id="e_insumo" onchange="ModuloEgresos.m_onCreacionInsumoChange(this.value)" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; background:#FFFFFF;">
+                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Insumo / Stock Consolidado en este Almacén</label>
+                        <select id="e_insumo" onchange="ModuloEgresos.m_onCreacionInsumoChange(this.value)" style="width:100%; padding:8px 10px; border-radius:8px; border:1.5px solid #1E6B4C; font-size:0.85rem; background:#FFFFFF; font-weight:600;">
                             <option value="">Esperando depósito...</option>
                         </select>
                     </div>
@@ -661,15 +523,22 @@ const ModuloEgresos = {
                 </div>
 
                 <div style="display:flex; justify-content:flex-end; gap:10px; border-top:1px solid #E0DCD4; padding-top:12px; margin-top:4px;">
-                    <button onclick="ModuloEgresos.m_cerrarModal()" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:9px 18px; border-radius:8px; font-weight:700; font-size:0.8rem; cursor:pointer;">CANCELAR</button>
-                    <button id="btn-guardar-egreso-local" style="background:#1E6B4C; color:#FFF; border:none; padding:9px 24px; border-radius:8px; font-weight:700; font-size:0.8rem; cursor:pointer; box-shadow:0 4px 12px rgba(30,107,76,0.25);">
-                        CONFIRMAR DESPACHO
-                    </button>
+                    <button type="button" class="agro-btn" onclick="ModuloEgresos.m_cerrarModal()">Cancelar</button>
+                    <button type="button" class="agro-btn primario" id="btn-guardar-egreso-local">Confirmar despacho</button>
                 </div>
             </div>
         `;
 
         document.getElementById('btn-guardar-egreso-local').onclick = () => this.m_guardarNuevoEgreso();
+
+        // Si hay un solo origen posible, se preselecciona
+        if (estDisponibles.length === 1) {
+            const sel = document.getElementById('e_est');
+            if (sel) { sel.value = estDisponibles[0]; this.m_onCreacionEstablecimientoChange(estDisponibles[0]); }
+        }
+        if (estDisponibles.length === 0) {
+            this.m_notificarAlerta('No hay stock disponible en ningún galpón para despachar.', 'alerta');
+        }
     },
 
     m_onCreacionEstablecimientoChange: function(estSel) {
@@ -694,6 +563,7 @@ const ModuloEgresos = {
         selectInsumo.innerHTML = '<option value="">Esperando depósito...</option>';
     },
 
+    // Agrupa y consolida todos los stocks de un depósito
     m_onCreacionDepositoChange: function(depSel) {
         const selectInsumo = document.getElementById('e_insumo');
         const estSel = document.getElementById('e_est').value;
@@ -707,11 +577,21 @@ const ModuloEgresos = {
         const estNorm = _normalizarTextoEgr(estSel);
         const depNorm = _normalizarTextoEgr(depSel);
 
-        const insumosDisponibles = this.listaStocksCalculados.filter(s => 
-            _normalizarTextoEgr(s.establecimiento) === estNorm && 
-            _normalizarTextoEgr(s.deposito) === depNorm && 
-            s.disponible > 0
-        );
+        // Agrupación de partidas repetidas en el mismo depósito
+        const mapaInsumosDepo = new Map();
+
+        this.listaStocksCalculados
+            .filter(s => _normalizarTextoEgr(s.establecimiento) === estNorm && _normalizarTextoEgr(s.deposito) === depNorm && s.disponible > 0)
+            .forEach(i => {
+                const artKey = _normalizarTextoEgr(i.articulo);
+                if (!mapaInsumosDepo.has(artKey)) {
+                    mapaInsumosDepo.set(artKey, { ...i, disponible: 0 });
+                }
+                const obj = mapaInsumosDepo.get(artKey);
+                obj.disponible += i.disponible;
+            });
+
+        const insumosDisponibles = Array.from(mapaInsumosDepo.values());
 
         const mapaMaestro = new Map();
         (this.parametros.insumosMaestros || []).forEach(m => {
@@ -727,7 +607,6 @@ const ModuloEgresos = {
                 const codFinal = maestro?.reg_local || codDirecto || '';
                 const unidadFinal = maestro?.unidad_medida || i.unidad || 'U';
 
-                // Búsqueda del último registro de compra en ingresos para clonar sus metadatos
                 const ultimoIng = this.datosIngresos.find(ing => 
                     (codFinal && String(ing.cod_articulo).trim() === codFinal) ||
                     _normalizarTextoEgr(ing.articulo || '') === artNom
@@ -744,7 +623,7 @@ const ModuloEgresos = {
                         data-precio="${precioCompra}"
                         data-desc="${descTecnica}"
                         data-rubro="${subRubro}">
-                        📦 ${i.articulo.toUpperCase()} — Disp: ${i.disponible} ${unidadFinal}
+                        📦 ${i.articulo.toUpperCase()} — Stock en Galpón: ${i.disponible.toLocaleString('es-AR')} ${unidadFinal}
                     </option>
                 `;
             }).join('');
@@ -758,8 +637,6 @@ const ModuloEgresos = {
 
     m_onCreacionInsumoChange: function(artSel) {
         const lbl = document.getElementById('lbl_stk_disponible');
-        const estSel = document.getElementById('e_est').value;
-        const depSel = document.getElementById('e_dep_origen').value;
         const selectInsumo = document.getElementById('e_insumo');
         if (!lbl || !selectInsumo) return;
 
@@ -770,7 +647,6 @@ const ModuloEgresos = {
             return;
         }
 
-        const codArtSel = optSelected.getAttribute('data-cod') || '';
         const disponible = parseFloat(optSelected.getAttribute('data-disponible')) || 0;
         const unidad = optSelected.getAttribute('data-unidad') || 'U';
         const precioUnitario = parseFloat(optSelected.getAttribute('data-precio')) || 0;
@@ -781,8 +657,6 @@ const ModuloEgresos = {
         const inputPrecio = document.getElementById('e_imp_u');
         if (inputPrecio) {
             inputPrecio.value = precioUnitario;
-            inputPrecio.style.backgroundColor = 'rgba(30, 107, 76, 0.1)';
-            setTimeout(() => { inputPrecio.style.backgroundColor = ''; }, 700);
         }
 
         const inputCant = document.getElementById('e_cant_input');
@@ -803,33 +677,26 @@ const ModuloEgresos = {
         }
 
         const estNorm = _normalizarTextoEgr(estSel);
-        const cuadrosFiltrados = this.parametros.cuadros.filter(c => 
-            _normalizarTextoEgr(c.establecimiento || '') === estNorm
-        );
+        const destinos = (this.parametros.destinos || []).filter(d => _normalizarTextoEgr(d.establecimiento) === estNorm);
 
-        selectCuadro.innerHTML = '<option value="">Seleccione Lote / Cuadro...</option>' +
-            cuadrosFiltrados.map(c => `
-                <option value="${c.reg_local}">
-                    ${c.campo || 'SIN LOTE'} — ${c.nombre_lote || c.lote || 'S/D'} (${c.sup || 0} Ha)
-                </option>
-            `).join('');
+        selectCuadro.innerHTML = `<option value="">${destinos.length ? 'Seleccione campo / cuadro...' : 'Sin cuadros cargados (queda como General)'}</option>` +
+            destinos.map(d => `<option value="${AgroUI.esc(d.clave)}">${AgroUI.esc(d.campo || 'SIN CAMPO')} — ${AgroUI.esc(d.nombre || d.lote || 'S/D')} (${AgroUI.num(d.sup, 1)} Ha)</option>`).join('');
     },
 
-    m_onDestinoCuadroChange: function(regLocalCuadro) {
-        if (!regLocalCuadro) return;
-
-        const matchCuadro = this.parametros.cuadros.find(c => String(c.reg_local) === String(regLocalCuadro));
-        if (matchCuadro) {
-            const inputSup = document.getElementById('e_sup_input');
-            const inputCampo = document.getElementById('e_campo');
-            const inputCuadroTxt = document.getElementById('e_cuadro_txt');
-
-            if (inputSup) inputSup.value = parseFloat(matchCuadro.sup) || 0;
-            if (inputCampo) inputCampo.value = matchCuadro.campo || '';
-            if (inputCuadroTxt) inputCuadroTxt.value = matchCuadro.nombre_lote || matchCuadro.lote || '';
-
-            this.m_recalcular();
+    m_onDestinoCuadroChange: function(claveDestino) {
+        const d = (this.parametros.destinos || []).find(x => x.clave === claveDestino);
+        const inputSup = document.getElementById('e_sup_input');
+        const inputCampo = document.getElementById('e_campo');
+        const inputCuadroTxt = document.getElementById('e_cuadro_txt');
+        if (!d) {
+            if (inputCampo) inputCampo.value = '';
+            if (inputCuadroTxt) inputCuadroTxt.value = '';
+            return;
         }
+        if (inputSup) inputSup.value = d.sup || 0;
+        if (inputCampo) inputCampo.value = d.campo || '';
+        if (inputCuadroTxt) inputCuadroTxt.value = d.lote || d.nombre || '';
+        this.m_recalcular();
     },
 
     m_recalcular: function() {
@@ -859,51 +726,36 @@ const ModuloEgresos = {
     },
 
     m_nuevoCentroCosto: function() {
-        const container = document.getElementById('modal-formulario');
-        if (!container) return;
-        const formOriginal = container.innerHTML;
+        const sub = AgroUI.subFormulario({
+            titulo: 'NUEVO CENTRO DE COSTO',
+            ancho: 560,
+            html: `
+                <div style="display:flex; flex-direction:column; gap:14px;">
+                    <div class="agro-aviso">Se agrega a <b>tipos_gastos</b> y queda disponible para imputar egresos.</div>
+                    <div class="agro-campo"><label>Nombre del concepto</label><input type="text" id="input_nuevo_centro" placeholder="Ej: SEGURO ACCIDENTES TRABAJO" style="text-transform:uppercase;"></div>
+                    <div class="agro-pie">
+                        <button type="button" class="agro-btn" id="btn-cancelar-centro">Volver</button>
+                        <button type="button" class="agro-btn primario" id="btn-confirmar-centro">Registrar</button>
+                    </div>
+                </div>`
+        });
 
-        container.innerHTML = `
-            <div style="display:flex; flex-direction:column; gap:12px; font-family:'Roboto', sans-serif;">
-                <div style="background:rgba(30,107,76,0.08); border-left:4px solid #1E6B4C; padding:10px 14px; border-radius:8px;">
-                    <strong style="color:#123F2C; font-size:0.85rem;">NUEVA CATEGORÍA DE GASTO / CENTRO DE COSTO</strong>
-                    <p style="font-size:0.72rem; margin:2px 0 0 0; color:#6B6255;">Agregue un concepto maestro en tipos_gastos para imputar egresos.</p>
-                </div>
-
-                <div>
-                    <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Nombre del Concepto</label>
-                    <input type="text" id="input_nuevo_centro" placeholder="Ej: SEGURO ACCIDENTES TRABAJO" style="text-transform:uppercase; width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
-                </div>
-
-                <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:8px; border-top:1px solid #E0DCD4; padding-top:12px;">
-                    <button type="button" id="btn-cancelar-centro" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:8px 16px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer;">VOLVER</button>
-                    <button type="button" id="btn-confirmar-centro" style="background:#1E6B4C; color:white; border:none; padding:8px 18px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer; box-shadow:0 4px 12px rgba(30,107,76,0.25);">REGISTRAR</button>
-                </div>
-            </div>`;
-
-        document.getElementById('input_nuevo_centro')?.focus();
-
-        document.getElementById('btn-cancelar-centro').onclick = () => {
-            container.innerHTML = formOriginal;
-        };
-
+        document.getElementById('btn-cancelar-centro').onclick = () => sub.cerrar();
         document.getElementById('btn-confirmar-centro').onclick = async () => {
             const nombre = document.getElementById('input_nuevo_centro').value.trim().toUpperCase();
-            if (!nombre) { this.m_notificarAlerta("Debe estipular una descripción mandatoria."); return; }
-
+            if (!nombre) return this.m_notificarAlerta("Escribí el nombre del concepto.");
+            if (this.parametros.gastos.some(g => AgroUI.norm(g.nombre_gasto) === nombre)) {
+                return this.m_notificarAlerta(`${nombre} ya existe.`);
+            }
             try {
                 await this.m_ejecutarSqlLocal(`INSERT INTO tipos_gastos (nombre_gasto, sincronizado) VALUES (?, 0)`, [nombre]);
-
-                ModuloEgresos.parametros.gastos.push({ nombre_gasto: nombre });
-                container.innerHTML = formOriginal;
-                
+                this.parametros.gastos.push({ nombre_gasto: nombre });
+                sub.cerrar();
                 const selectCentro = document.getElementById('e_centro');
-                if (selectCentro) {
-                    const opt = new Option(nombre, nombre, true, true);
-                    selectCentro.add(opt);
-                }
+                if (selectCentro) selectCentro.add(new Option(nombre, nombre, true, true));
+                this.m_notificarAlerta(`Centro de costo ${nombre} agregado.`, 'exito');
             } catch (err) {
-                this.m_notificarAlerta("Error al guardar en tipos_gastos: " + err.message, 'error');
+                this.m_notificarAlerta("No se pudo guardar en tipos_gastos: " + err.message, 'error');
             }
         };
     },
@@ -944,7 +796,7 @@ const ModuloEgresos = {
         const subRubro = optSelected?.getAttribute('data-rubro') || '';
 
         if (totalConsumoInput > disponibleActual) {
-            this.m_notificarAlerta(`Stock insuficiente en galpón: Hay ${disponibleActual} disponibles para despachar.`, 'alerta');
+            this.m_notificarAlerta(`Stock insuficiente: hay ${AgroUI.num(disponibleActual, 2)} disponibles en el galpón.`, 'alerta');
             return;
         }
 
@@ -975,7 +827,7 @@ const ModuloEgresos = {
                     imp_uni, total_dolar, cotizacion, total_pesos, centro_costo, labor, tipo_labor,
                     contratista, apoyo, ha_apoyo, costo_ha, total_apoyo, costo_final,
                     costo_final_ha_dolar, comentario, estado, cod_articulo, sincronizado
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Activo', ?, 0)
             `;
 
             const paramsInsert = [
@@ -992,7 +844,7 @@ const ModuloEgresos = {
                 document.getElementById('e_cuadro_txt').value || 'GENERAL', 
                 supUsoInput, 
                 0,
-                totalConsumoInput, 
+                totalConsumoInput,
                 impUniInput, 
                 totalDolarInput, 
                 cotizacionInput,
@@ -1008,7 +860,6 @@ const ModuloEgresos = {
                 (impUniInput * supUsoInput),
                 costoFinalHaDolarInput, 
                 descTecnica || 'Despacho Directo de Stock',
-                'Activo', 
                 codArt
             ];
 
@@ -1030,6 +881,7 @@ const ModuloEgresos = {
     m_abrirModalEdicion: function(reg_local, id) {
         this.m_asegurarModalBase();
         const reg = this.datosEgresos.find(e => String(e.reg_local) === String(reg_local) && (e.id == id || !id));
+        AgroUI.anchoModal(760);
         if (!reg) return;
 
         const modal = document.getElementById('modal-agrosoft');
@@ -1096,15 +948,14 @@ const ModuloEgresos = {
                     <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Centro de Costo Imputable</label>
                     <select id="e_centro" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; background:#FFFFFF;">
                         <option value="">Seleccione Centro de Costo...</option>
-                        ${this.parametros.gastos.map(g => `<option value="${g.nombre_gasto}">${g.nombre_gasto}</option>`).join('')}
+                        ${this.parametros.gastos.map(g => `<option value="${AgroUI.esc(g.nombre_gasto)}" ${AgroUI.norm(g.nombre_gasto) === AgroUI.norm(reg.centro_costo) ? 'selected' : ''}>${AgroUI.esc(g.nombre_gasto)}</option>`).join('')}
+                        ${reg.centro_costo && !this.parametros.gastos.some(g => AgroUI.norm(g.nombre_gasto) === AgroUI.norm(reg.centro_costo)) ? `<option value="${AgroUI.esc(reg.centro_costo)}" selected>${AgroUI.esc(reg.centro_costo)}</option>` : ''}
                     </select>
                 </div>
 
                 <div style="display:flex; justify-content:flex-end; gap:10px; border-top:1px solid #E0DCD4; padding-top:12px; margin-top:4px;">
-                    <button onclick="ModuloEgresos.m_cerrarModal()" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:9px 18px; border-radius:8px; font-weight:700; font-size:0.8rem; cursor:pointer;">CANCELAR</button>
-                    <button id="btn-actualizar-egreso-local" style="background:#1E6B4C; color:#FFF; border:none; padding:9px 22px; border-radius:8px; font-weight:700; font-size:0.8rem; cursor:pointer;">
-                        ACTUALIZAR VALORES
-                    </button>
+                    <button type="button" class="agro-btn" onclick="ModuloEgresos.m_cerrarModal()">Cancelar</button>
+                    <button type="button" class="agro-btn primario" id="btn-actualizar-egreso-local">Actualizar valores</button>
                 </div>
             </div>`;
 
@@ -1162,42 +1013,15 @@ const ModuloEgresos = {
         }
     },
 
-    m_solicitarBorrado: function(reg_local, id, insumo) {
-        this.m_asegurarModalBase();
-        const modal = document.getElementById('modal-agrosoft');
-        const container = document.getElementById('modal-formulario');
-        const modalContent = document.querySelector('.modal-apple-content');
-        if (modalContent) modalContent.style.maxWidth = '420px';
-
-        document.getElementById('modal-titulo').innerText = "⚠️ REVERSIÓN DE EXISTENCIA";
-
-        container.innerHTML = `
-            <div style="font-family:'Roboto', sans-serif; text-align:center; display:flex; flex-direction:column; gap:14px; padding:10px 5px;">
-                <div style="width:50px; height:50px; background:rgba(224,52,42,0.1); border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto; border:1px solid rgba(224,52,42,0.25);">
-                    <span style="color:#E0342A; font-size:1.5rem; font-weight:bold;">!</span>
-                </div>
-
-                <div>
-                    <h3 style="margin:0; font-size:1.1rem; font-weight:bold; color:#1D1D1F;">¿Desea eliminar este egreso?</h3>
-                    <p style="margin:6px 0 0 0; font-size:0.8rem; color:#6E6E73; line-height:1.4;">
-                        El stock del insumo volverá a sumarse automáticamente al galpón de origen:<br>
-                        <strong style="color:#E0342A; font-size:0.88rem; display:block; margin-top:4px;">${insumo}</strong>
-                    </p>
-                </div>
-
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:8px; border-top:1px solid #E0DCD4; padding-top:14px;">
-                    <button onclick="ModuloEgresos.m_cerrarModal()" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:9px; border-radius:8px; font-weight:bold; font-size:0.78rem; cursor:pointer;">
-                        CANCELAR
-                    </button>
-                    <button id="btn-eliminar-confirmar" style="background:#E0342A; color:white; border:none; padding:9px; border-radius:8px; font-weight:bold; font-size:0.78rem; cursor:pointer; box-shadow:0 4px 12px rgba(224,52,42,0.25);">
-                        ELIMINAR AHORA
-                    </button>
-                </div>
-            </div>
-        `;
-        
-        document.getElementById('btn-eliminar-confirmar').onclick = () => this.m_ejecutarBorrado(reg_local, id);
-        if (modal) modal.style.display = 'flex';
+    m_solicitarBorrado: async function(reg_local, id, insumo) {
+        const ok = await AgroUI.confirmar({
+            titulo: '¿Revertir este egreso?',
+            mensaje: 'La cantidad vuelve a sumar al stock del galpón de origen.',
+            detalle: insumo,
+            textoOk: 'Revertir',
+            peligro: true
+        });
+        if (ok) await this.m_ejecutarBorrado(reg_local, id);
     },
 
     m_ejecutarBorrado: async function(reg_local, id) {
@@ -1237,174 +1061,420 @@ const ModuloEgresos = {
     },
 
     m_exportarPDF: function() {
-        let jsPDF, autoTable;
-        try {
-            jsPDF = require('jspdf').jsPDF;
-            autoTable = require('jspdf-autotable').default;
-        } catch (e) {
-            console.error(e);
-            this.m_notificarAlerta("La librería de exportación a PDF no está disponible.", 'error');
-            return;
+        const datos = this.m_obtenerEgresosFiltrados ? this.m_obtenerEgresosFiltrados() : [];
+        if (!datos || datos.length === 0) {
+            return this.m_notificarAlerta("No hay registros para exportar.", 'error');
         }
 
-        const datos = this.m_obtenerEgresosFiltrados();
-        if (datos.length === 0) return alert("No hay registros para exportar.");
+        const esElectron = typeof require === 'function' && typeof process !== 'undefined';
+        let jsPDFClass = null;
+        let autoTableFunc = null;
 
-        const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-        const anchoPagina = doc.internal.pageSize.getWidth();
-        const altoPagina = doc.internal.pageSize.getHeight();
+        if (typeof window !== 'undefined' && window.jspdf) {
+            jsPDFClass = window.jspdf.jsPDF;
+            autoTableFunc = (doc, opts) => doc.autoTable ? doc.autoTable(opts) : (window.jspdf.autoTable ? window.jspdf.autoTable(doc, opts) : null);
+        } else if (esElectron) {
+            try {
+                jsPDFClass = require('jspdf').jsPDF;
+                autoTableFunc = (doc, opts) => {
+                    const at = require('jspdf-autotable');
+                    return (typeof at === 'function') ? at(doc, opts) : (at.default ? at.default(doc, opts) : doc.autoTable(opts));
+                };
+            } catch (e) {
+                console.warn("Fallo importación Node jsPDF:", e);
+            }
+        }
 
-        const verde = [30, 107, 76];
-        const gris = [110, 110, 115];
-
-        doc.setFillColor(...verde);
-        doc.rect(0, 0, anchoPagina, 22, 'F');
-        doc.setTextColor(255, 255, 255);
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(15);
-        doc.text('SALVUCCI GESTIÓN - AGROSOFT', 12, 10);
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(9.5);
-        doc.text('Reporte de Gestión de Costos y Egresos', 12, 16);
-
-        doc.setFontSize(8);
-        doc.text(`Generado: ${new Date().toLocaleString('es-AR')}`, anchoPagina - 12, 10, { align: 'right' });
-        doc.text(`Origen: ${this.filtroOrigenActual} | Destino: ${this.filtroEstablecimientoActual || 'TODOS'}`, anchoPagina - 12, 16, { align: 'right' });
-
-        const cabeceras = [['FECHA', 'ORIGEN', 'INSUMO', 'LABOR', 'DESTINO TÉCNICO', 'CENTRO DE COSTO', 'CONSUMO', 'U$S UNIT.', 'COSTO HA U$S']];
+        const folio = typeof window.generarFolio === 'function' ? window.generarFolio('EGR') : `EGR-${Date.now().toString().slice(-6)}`;
+        const hoyStr = new Date().toISOString().split('T')[0];
+        const emitido = new Date().toLocaleString('es-AR');
+        const operario = (typeof operarioName !== 'undefined' ? operarioName : (window.operarioGlobal || 'ADMINISTRADOR')).toUpperCase();
 
         let sumaConsumo = 0;
-        let sumaCostoHa = 0;
-        const filas = datos.map(e => {
+        let sumaDolar = 0;
+        let sumaPesos = 0;
+
+        datos.forEach(e => {
             sumaConsumo += Number(e.total_consumo || 0);
-            sumaCostoHa += Number(e.costo_final_ha_dolar || 0);
-            const origenLabel = (e.tabla_origen || 'DESPACHO_STOCK').toUpperCase().replace(/_/g, ' ');
-            return [
-                e.fecha || '-',
-                origenLabel,
-                e.insumo || 'S/I',
-                e.labor || e.tipo_labor || '-',
-                `${e.establecimiento || '-'} / ${e.campo || '-'}`,
-                e.centro_costo || '-',
-                Number(e.total_consumo || 0).toLocaleString('es-AR'),
-                `U$S ${Number(e.imp_uni || 0).toFixed(2)}`,
-                `U$S ${Number(e.costo_final_ha_dolar || 0).toFixed(2)}`
-            ];
+            sumaDolar += Number(e.total_dolar || 0);
+            sumaPesos += Number(e.total_pesos || 0);
         });
 
-        autoTable(doc, {
-            head: cabeceras,
-            body: filas,
-            startY: 27,
-            theme: 'grid',
-            styles: { font: 'helvetica', fontSize: 7.5, cellPadding: 2, textColor: [30, 30, 30], lineColor: [228, 231, 236], lineWidth: 0.1 },
-            headStyles: { fillColor: verde, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7.5 },
-            alternateRowStyles: { fillColor: [250, 251, 252] },
-            columnStyles: {
-                6: { halign: 'right' },
-                7: { halign: 'right' },
-                8: { halign: 'right' }
-            },
-            foot: [[
-                { content: `TOTAL DE REGISTROS: ${datos.length}`, colSpan: 6, styles: { halign: 'left', fontStyle: 'bold', fillColor: [246, 247, 249], textColor: [30, 30, 30] } },
-                { content: sumaConsumo.toLocaleString('es-AR'), styles: { halign: 'right', fontStyle: 'bold', fillColor: [246, 247, 249] } },
-                { content: '', styles: { fillColor: [246, 247, 249] } },
-                { content: `U$S ${sumaCostoHa.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, styles: { halign: 'right', fontStyle: 'bold', textColor: verde, fillColor: [246, 247, 249] } }
-            ]]
-        });
+        const confTema = window.SALVUCCI_CONF || {
+            rgbTema: [30, 107, 76],
+            rgbTemaDark: [18, 63, 44],
+            empresaDomicilio: 'Auditoría Central de Costos y Aplicaciones',
+            pieInstitucional: 'Salvucci Gestión · Auditoría Operativa y Costos Agrícolas'
+        };
 
-        const totalPaginas = doc.internal.getNumberOfPages();
-        for (let p = 1; p <= totalPaginas; p++) {
-            doc.setPage(p);
-            doc.setFontSize(7.5);
-            doc.setTextColor(...gris);
-            doc.text('Salvucci Gestión - AgroSoft J&L', 12, altoPagina - 6);
-            doc.text(`Página ${p} de ${totalPaginas}`, anchoPagina - 12, altoPagina - 6, { align: 'right' });
+        if (jsPDFClass) {
+            try {
+                const doc = new jsPDFClass({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+                const pageW = doc.internal.pageSize.getWidth();
+                const pageH = doc.internal.pageSize.getHeight();
+                const margen = 12;
+                const ALTO_HEADER = 38;
+                const ALTO_PIE = 14;
+                const logoBase64 = typeof window.cargarLogoBase64 === 'function' ? window.cargarLogoBase64() : null;
+
+                function dibujarEncabezado(data) {
+                    const pagina = data && data.pageNumber ? data.pageNumber : 1;
+
+                    doc.setFillColor(...confTema.rgbTema);
+                    doc.rect(0, 0, pageW, 3, 'F');
+                    doc.setFillColor(248, 250, 248);
+                    doc.rect(0, 3, pageW, ALTO_HEADER - 3, 'F');
+
+                    if (logoBase64) {
+                        try { doc.addImage('data:image/png;base64,' + logoBase64, 'PNG', margen, 6.5, 19, 19); } catch (e) {}
+                    } else {
+                        doc.setDrawColor(200, 205, 208);
+                        doc.setLineWidth(0.3);
+                        doc.roundedRect(margen, 6.5, 19, 19, 2, 2, 'D');
+                    }
+
+                    const xTexto = margen + 24;
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(13);
+                    doc.setTextColor(...confTema.rgbTemaDark);
+                    doc.text('SALVUCCI GESTIÓN · REPORTE DE COSTOS Y EGRESOS', xTexto, 12.5);
+
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(8);
+                    doc.setTextColor(85, 99, 88);
+                    doc.text(confTema.empresaDomicilio, xTexto, 17);
+
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(10.5);
+                    doc.setTextColor(...confTema.rgbTema);
+                    doc.text('AUDITORÍA FINANCIERA DE CONSUMO DE INSUMOS Y LABORES', xTexto, 24.5);
+
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(7.5);
+                    doc.setTextColor(110, 120, 115);
+                    doc.text(`Registros procesados: ${datos.length}   ·   Gasto Consolidado: U$S ${sumaDolar.toLocaleString('es-AR', {minimumFractionDigits: 2})}`, xTexto, 29);
+
+                    const anchoCb = 60;
+                    const xCb = pageW - margen - anchoCb;
+                    if (typeof window.dibujarCodigoBarrasPdf === 'function') {
+                        window.dibujarCodigoBarrasPdf(doc, folio, xCb, 6.5, anchoCb, 10);
+                    }
+
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(7.2);
+                    doc.setTextColor(90, 100, 95);
+                    doc.text(`Emitido: ${emitido}`, pageW - margen, 24, { align: 'right' });
+                    doc.text(`Operador: ${operario}`, pageW - margen, 28, { align: 'right' });
+                    doc.text(`Página ${pagina}`, pageW - margen, 32, { align: 'right' });
+
+                    doc.setDrawColor(...confTema.rgbTema);
+                    doc.setLineWidth(0.5);
+                    doc.line(margen, ALTO_HEADER - 2, pageW - margen, ALTO_HEADER - 2);
+                }
+
+                const cabeceras = [['FECHA', 'ORIGEN', 'INSUMO', 'LABOR', 'DESTINO TÉCNICO', 'CENTRO COSTO', 'CONSUMO', 'U$S UNIT.', 'TOTAL (U$S)']];
+                const filas = datos.map(e => [
+                    e.fecha || '-',
+                    (e.tabla_origen || 'DESPACHO').replace(/_/g, ' ').toUpperCase(),
+                    (e.insumo || 'S/I').toUpperCase(),
+                    (e.labor || e.tipo_labor || '-').toUpperCase(),
+                    `${(e.establecimiento || '-').toUpperCase()} / ${(e.campo || '-').toUpperCase()}`,
+                    (e.centro_costo || '-').toUpperCase(),
+                    Number(e.total_consumo || 0).toLocaleString('es-AR'),
+                    `U$S ${Number(e.imp_uni || 0).toFixed(2)}`,
+                    `U$S ${Number(e.total_dolar || 0).toLocaleString('es-AR', { minimumFractionDigits: 2 })}`
+                ]);
+
+                const autoTableOpts = {
+                    head: cabeceras,
+                    body: filas,
+                    startY: ALTO_HEADER + 4,
+                    margin: { left: margen, right: margen, top: ALTO_HEADER + 4, bottom: ALTO_PIE + 6 },
+                    theme: 'grid',
+                    styles: { font: 'helvetica', fontSize: 7.2, cellPadding: 2, textColor: [30, 30, 30], lineColor: [224, 220, 212], lineWidth: 0.12, valign: 'middle' },
+                    headStyles: { fillColor: confTema.rgbTema, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7.5, halign: 'center' },
+                    alternateRowStyles: { fillColor: [248, 250, 248] },
+                    columnStyles: {
+                        2: { fontStyle: 'bold', textColor: confTema.rgbTemaDark },
+                        6: { halign: 'right' },
+                        7: { halign: 'right' },
+                        8: { halign: 'right', fontStyle: 'bold', textColor: confTema.rgbTema }
+                    },
+                    didDrawPage: dibujarEncabezado
+                };
+
+                if (doc.autoTable) doc.autoTable(autoTableOpts);
+                else autoTableFunc(doc, autoTableOpts);
+
+                const nombreArchivo = `Egresos_Insumos_${hoyStr}.pdf`;
+                if (esElectron && typeof window.guardarEnDescargas === 'function') {
+                    window.guardarEnDescargas(nombreArchivo, Buffer.from(doc.output('arraybuffer')));
+                    if (this.m_notificarAlerta) this.m_notificarAlerta(`✓ PDF guardado en Descargas: ${nombreArchivo}`, 'exito');
+                } else {
+                    doc.save(nombreArchivo);
+                }
+                return;
+            } catch (err) {
+                console.warn("Fallo jsPDF:", err);
+            }
         }
-
-        this._m_descargarBlob(doc.output('blob'), `Egresos_Insumos_${new Date().toISOString().split('T')[0]}.pdf`);
-        this.m_notificarAlerta("Reporte PDF generado con éxito.", 'exito');
     },
 
-    m_exportarExcel: function() {
-        let XLSX;
+    // EXCEL SUPER PROFESIONAL CON MOTOR EXCELJS
+    m_exportarExcel: async function() {
+        const datos = this.m_obtenerEgresosFiltrados ? this.m_obtenerEgresosFiltrados() : [];
+        if (!datos || datos.length === 0) {
+            return this.m_notificarAlerta("No hay registros para exportar.", 'error');
+        }
+
+        const esElectron = typeof require === 'function' && typeof process !== 'undefined';
+        let ExcelJS = null;
+
+        if (typeof window !== 'undefined' && window.ExcelJS) {
+            ExcelJS = window.ExcelJS;
+        } else if (esElectron) {
+            try { ExcelJS = require('exceljs'); } catch (e) { ExcelJS = null; }
+        }
+
+        if (!ExcelJS) {
+            return this.m_notificarAlerta("La librería ExcelJS no está disponible.", "error");
+        }
+
         try {
-            XLSX = require('xlsx');
-        } catch (e) {
-            console.error(e);
-            this.m_notificarAlerta("La librería de exportación a Excel no está disponible.", 'error');
-            return;
-        }
+            const wb = new ExcelJS.Workbook();
+            wb.creator = 'Salvucci Gestión · AgroSoft J&L';
+            wb.created = new Date();
 
-        const datos = this.m_obtenerEgresosFiltrados();
-        if (datos.length === 0) return alert("No hay registros para exportar.");
+            const confTema = window.SALVUCCI_CONF || {
+                argbDark: 'FF104630',
+                argbTema: 'FF1E6B4C',
+                empresaRazon: 'SALVUCCI GESTIÓN · AGROSOFT J&L',
+                empresaDomicilio: 'Auditoría Central de Costos, Labores y Despachos',
+                pieInstitucional: 'Sistemas de Gestión Agrosoft J&L - Chimpay R.N.'
+            };
 
-        const numFmt = '#,##0.00';
-        const dolarFmt = '"U$S" #,##0.00';
-        const pesosFmt = '"$" #,##0.00';
+            const folio = typeof window.generarFolio === 'function' ? window.generarFolio('EGR') : `EGR-${Date.now().toString().slice(-6)}`;
+            const hoyStr = new Date().toISOString().split('T')[0];
+            const operario = (typeof operarioName !== 'undefined' ? operarioName : (window.operarioGlobal || 'ADMINISTRADOR')).toUpperCase();
 
-        const encabezados = [
-            'REG. LOCAL', 'ORIGEN TABLA', 'FECHA', 'INSUMO', 'LABOR', 'TIPO LABOR', 'DEPÓSITO ORIGEN',
-            'ESTABLECIMIENTO', 'CAMPO', 'CUADRO', 'CONTRATISTA', 'SUP. USO (HA)', 'CONSUMO TOTAL',
-            'COSTO UNIT. (U$S)', 'COTIZACIÓN', 'TOTAL (U$S)', 'TOTAL ($)', 'COSTO HA (U$S)',
-            'CENTRO DE COSTO', 'ESTADO', 'COMENTARIO'
-        ];
-
-        const filas = datos.map(e => [
-            e.reg_local || '',
-            (e.tabla_origen || '').replace(/_/g, ' '),
-            e.fecha || '',
-            e.insumo || '',
-            e.labor || '',
-            e.tipo_labor || '',
-            e.deposito_origen || '',
-            e.establecimiento || '',
-            e.campo || '',
-            e.cuadro || '',
-            e.contratista || '',
-            Number(e.sup_uso || 0),
-            Number(e.total_consumo || 0),
-            Number(e.imp_uni || 0),
-            Number(e.cotizacion || 0),
-            Number(e.total_dolar || 0),
-            Number(e.total_pesos || 0),
-            Number(e.costo_final_ha_dolar || 0),
-            e.centro_costo || '',
-            e.estado || 'Activo',
-            e.comentario || ''
-        ]);
-
-        const sumaConsumo = datos.reduce((a, e) => a + Number(e.total_consumo || 0), 0);
-        const sumaDolar = datos.reduce((a, e) => a + Number(e.total_dolar || 0), 0);
-        const sumaPesos = datos.reduce((a, e) => a + Number(e.total_pesos || 0), 0);
-        const filaTotales = ['', '', '', '', '', '', '', '', '', '', 'TOTALES →', '', sumaConsumo, '', '', sumaDolar, sumaPesos, '', '', '', ''];
-
-        const aoa = [encabezados, ...filas, filaTotales];
-        const ws = XLSX.utils.aoa_to_sheet(aoa);
-
-        ws['!cols'] = [
-            { wch: 10 }, { wch: 16 }, { wch: 11 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 18 },
-            { wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 18 }, { wch: 12 }, { wch: 14 },
-            { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
-            { wch: 18 }, { wch: 12 }, { wch: 26 }
-        ];
-        ws['!autofilter'] = { ref: `A1:U${filas.length + 1}` };
-        ws['!views'] = [{ state: 'frozen', ySplit: 1 }];
-
-        for (let r = 2; r <= filas.length + 2; r++) {
-            [['L', numFmt], ['M', numFmt], ['N', dolarFmt], ['O', numFmt], ['P', dolarFmt], ['Q', pesosFmt], ['R', dolarFmt]].forEach(([col, fmt]) => {
-                const celda = ws[`${col}${r}`];
-                if (celda && typeof celda.v === 'number') celda.z = fmt;
+            const ws = wb.addWorksheet('Egresos y Despachos', {
+                views: [{ state: 'frozen', ySplit: 5 }],
+                pageSetup: {
+                    orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0,
+                    paperSize: 9, margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.6, header: 0.2, footer: 0.3 }
+                }
             });
+
+            const cols = [
+                { header: 'REG. LOCAL', key: 'reg_local', xl: 12, halign: 'center' },
+                { header: 'ORIGEN TABLA', key: 'origen', xl: 18 },
+                { header: 'FECHA', key: 'fecha', xl: 13, halign: 'center' },
+                { header: 'INSUMO', key: 'insumo', xl: 24 },
+                { header: 'LABOR / TAREA', key: 'labor', xl: 20 },
+                { header: 'DEPÓSITO ORIGEN', key: 'deposito', xl: 18 },
+                { header: 'ESTABLECIMIENTO', key: 'establecimiento', xl: 20 },
+                { header: 'CAMPO / CUADRO', key: 'campo_cuadro', xl: 18 },
+                { header: 'CONSUMO TOTAL', key: 'consumo', xl: 16, halign: 'right', numero: true },
+                { header: 'COSTO UNIT. U$S', key: 'imp_uni', xl: 16, halign: 'right', numero: true },
+                { header: 'COTIZACIÓN ($)', key: 'cotizacion', xl: 15, halign: 'right', numero: true },
+                { header: 'TOTAL (U$S)', key: 'total_dolar', xl: 18, halign: 'right', numero: true, destacada: true },
+                { header: 'TOTAL ($)', key: 'total_pesos', xl: 18, halign: 'right', numero: true },
+                { header: 'COSTO HA (U$S)', key: 'costo_ha', xl: 16, halign: 'right', numero: true, destacada: true },
+                { header: 'CENTRO COSTO', key: 'centro_costo', xl: 18 },
+                { header: 'ESTADO', key: 'estado', xl: 12, halign: 'center' }
+            ];
+
+            ws.columns = cols.map(c => ({ header: c.header, key: c.key, width: c.xl }));
+
+            let totalConsumo = 0, totalDolar = 0, totalPesos = 0;
+
+            const filas = datos.map(e => {
+                const c = Number(e.total_consumo || 0);
+                const d = Number(e.total_dolar || 0);
+                const p = Number(e.total_pesos || 0);
+
+                totalConsumo += c;
+                totalDolar += d;
+                totalPesos += p;
+
+                return {
+                    reg_local: e.reg_local || e.id || '',
+                    origen: (e.tabla_origen || 'DESPACHO').replace(/_/g, ' ').toUpperCase(),
+                    fecha: e.fecha || '-',
+                    insumo: (e.insumo || '').toUpperCase(),
+                    labor: (e.labor || e.tipo_labor || '-').toUpperCase(),
+                    deposito: (e.deposito_origen || '-').toUpperCase(),
+                    establecimiento: (e.establecimiento || '-').toUpperCase(),
+                    campo_cuadro: `${e.campo || '-'} · ${e.cuadro || 'Gral'}`,
+                    consumo: c,
+                    imp_uni: Number(e.imp_uni || 0),
+                    cotizacion: Number(e.cotizacion || 0),
+                    total_dolar: d,
+                    total_pesos: p,
+                    costo_ha: Number(e.costo_final_ha_dolar || 0),
+                    centro_costo: (e.centro_costo || '-').toUpperCase(),
+                    estado: (e.estado || 'Activo').toUpperCase()
+                };
+            });
+
+            filas.forEach(f => ws.addRow(f));
+
+            // Membrete Superior
+            ws.spliceRows(1, 0, [], [], [], []);
+            const nCols = cols.length;
+
+            ws.getRow(1).height = 34;
+            ws.getRow(2).height = 16;
+            ws.getRow(3).height = 15;
+            ws.getRow(4).height = 15;
+
+            ws.mergeCells(1, 2, 1, nCols);
+            ws.mergeCells(2, 2, 2, nCols);
+            ws.mergeCells(3, 2, 3, nCols);
+            ws.mergeCells(4, 2, 4, nCols);
+
+            const cTitulo = ws.getCell(1, 2);
+            cTitulo.value = 'SALVUCCI GESTIÓN · COSTOS — AUDITORÍA GENERAL DE EGRESOS Y DESPACHOS';
+            cTitulo.font = { bold: true, size: 14, color: { argb: confTema.argbDark } };
+            cTitulo.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            const cSub = ws.getCell(2, 2);
+            cSub.value = 'Consolidado financiero de salidas por balanza, órdenes operativas y despachos de stock';
+            cSub.font = { italic: true, size: 9.5, color: { argb: 'FF556358' } };
+            cSub.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            const cEmpresa = ws.getCell(3, 2);
+            cEmpresa.value = confTema.empresaRazon + ' — ' + confTema.empresaDomicilio;
+            cEmpresa.font = { size: 8.5, color: { argb: 'FF556358' } };
+            cEmpresa.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            const cMeta = ws.getCell(4, 2);
+            cMeta.value = 'Folio: ' + folio + '   ·   Emitido: ' + new Date().toLocaleString('es-AR') +
+                          '   ·   Operario: ' + operario + '   ·   Registros: ' + filas.length;
+            cMeta.font = { bold: true, size: 8.5, color: { argb: confTema.argbTema } };
+            cMeta.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            // Logo
+            if (typeof window.cargarLogoBase64 === 'function') {
+                const logoBase64 = window.cargarLogoBase64();
+                if (logoBase64) {
+                    try {
+                        const idLogo = wb.addImage({ base64: 'data:image/png;base64,' + logoBase64, extension: 'png' });
+                        ws.addImage(idLogo, { tl: { col: 0.15, row: 0.1 }, ext: { width: 72, height: 72 }, editAs: 'oneCell' });
+                    } catch (e) {}
+                }
+            }
+
+            // Código de Barras
+            if (typeof window.codigoBarrasPngBase64 === 'function') {
+                const cbBase64 = window.codigoBarrasPngBase64(folio, 420, 62);
+                if (cbBase64) {
+                    try {
+                        const idCb = wb.addImage({ base64: cbBase64, extension: 'png' });
+                        ws.addImage(idCb, { tl: { col: Math.max(nCols - 3, 1), row: 0.15 }, ext: { width: 230, height: 44 }, editAs: 'oneCell' });
+                    } catch (e) {}
+                }
+            }
+
+            // Cabecera Fila 5
+            const filaHead = ws.getRow(5);
+            filaHead.height = 24;
+            filaHead.eachCell({ includeEmpty: true }, cell => {
+                cell.font = { bold: true, size: 9.5, color: { argb: 'FFFFFFFF' } };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: confTema.argbTema } };
+                cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+                cell.border = { bottom: { style: 'thin', color: { argb: confTema.argbDark } } };
+            });
+
+            const primeraFila = 6;
+            const ultimaFila = primeraFila + filas.length - 1;
+
+            for (let r = primeraFila; r <= ultimaFila; r++) {
+                const fila = ws.getRow(r);
+                cols.forEach((c, i) => {
+                    const cell = fila.getCell(i + 1);
+                    cell.alignment = { vertical: 'middle', horizontal: c.halign || 'left' };
+                    cell.font = { size: 9, bold: !!c.destacada };
+                    cell.border = {
+                        top: { style: 'hair', color: { argb: 'FFD2D7D3' } },
+                        bottom: { style: 'hair', color: { argb: 'FFD2D7D3' } }
+                    };
+                    if (c.numero) cell.numFmt = '#,##0.00';
+                    if (c.key === 'total_dolar') cell.font = { size: 9, bold: true, color: { argb: 'FF1E6B4C' } };
+                });
+                if ((r - primeraFila) % 2 === 1) {
+                    fila.eachCell({ includeEmpty: true }, cell => {
+                        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF7F8F7' } };
+                    });
+                }
+            }
+
+            // Totales con fórmula nativa SUM
+            if (filas.length > 0) {
+                const filaTot = ws.getRow(ultimaFila + 2);
+                filaTot.height = 20;
+                cols.forEach((c, i) => {
+                    const cell = filaTot.getCell(i + 1);
+                    if (i === 0) cell.value = 'TOTALES';
+                    else if (c.key === 'consumo' || c.key === 'total_dolar' || c.key === 'total_pesos') {
+                        const colLetra = cell.address.replace(/\d+$/, '');
+                        cell.value = { formula: `SUM(${colLetra}${primeraFila}:${colLetra}${ultimaFila})` };
+                        cell.numFmt = '#,##0.00';
+                    }
+                    cell.font = { bold: true, size: 9.5, color: { argb: 'FFFFFFFF' } };
+                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: confTema.argbDark } };
+                    cell.alignment = { vertical: 'middle', horizontal: c.halign || 'left' };
+                });
+            }
+
+            // Hoja 2: Resumen Ejecutivo
+            const wsRes = wb.addWorksheet('Resumen');
+            wsRes.columns = [{ header: 'INDICADOR', key: 'label', width: 36 }, { header: 'VALOR', key: 'valor', width: 24 }];
+            wsRes.getRow(1).eachCell(cell => {
+                cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: confTema.argbTema } };
+                cell.alignment = { vertical: 'middle', horizontal: 'center' };
+            });
+            wsRes.getRow(1).height = 22;
+
+            const resumenKPI = [
+                { label: 'Egresos y Despachos Registrados', valor: String(datos.length) },
+                { label: 'Total Insumos / Grano Egresado', valor: totalConsumo.toLocaleString('es-AR', {minimumFractionDigits: 2}) },
+                { label: 'Valorización Consolidada (U$S)', valor: `U$S ${totalDolar.toLocaleString('es-AR', {minimumFractionDigits: 2})}` },
+                { label: 'Total Pesificado ($ ARS)', valor: `$ ${totalPesos.toLocaleString('es-AR', {minimumFractionDigits: 2})}` },
+                { label: 'Filtro Origen Aplicado', valor: this.filtroOrigenActual },
+                { label: 'Filtro Depósito Aplicado', valor: this.filtroDepositoActual }
+            ];
+
+            resumenKPI.forEach(r => wsRes.addRow({ label: r.label, valor: r.valor }));
+            wsRes.addRow({});
+            wsRes.addRow({ label: 'Folio de Auditoría', valor: folio });
+            wsRes.addRow({ label: 'Fecha de Emisión', valor: new Date().toLocaleString('es-AR') });
+            wsRes.addRow({ label: 'Operador Responsable', valor: operario });
+
+            ws.autoFilter = { from: { row: 5, column: 1 }, to: { row: Math.max(ultimaFila, 5), column: nCols } };
+            const pieXls = '&L&"Arial,Bold"&8' + confTema.pieInstitucional + '&R&8Folio ' + folio + ' · Página &P de &N';
+            ws.headerFooter = { oddFooter: pieXls, evenFooter: pieXls };
+            wsRes.headerFooter = { oddFooter: pieXls, evenFooter: pieXls };
+            ws.pageSetup.printTitlesRow = '5:5';
+
+            const nombreArchivo = `Salvucci_Egresos_Costos_${hoyStr}.xlsx`;
+            const buffer = await wb.xlsx.writeBuffer();
+
+            if (esElectron && typeof window.guardarEnDescargas === 'function') {
+                window.guardarEnDescargas(nombreArchivo, Buffer.from(buffer));
+                this.m_notificarAlerta(`✓ Excel guardado en Descargas: ${nombreArchivo}`, 'exito');
+            } else if (typeof window.descargarNativoBlob === 'function') {
+                const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                window.descargarNativoBlob(blob, nombreArchivo);
+            } else {
+                this._m_descargarBlob(new Blob([buffer], { type: 'application/octet-stream' }), nombreArchivo);
+            }
+
+        } catch (err) {
+            console.error("Error al generar el reporte Excel:", err);
+            this.m_notificarAlerta("Error al generar el Excel: " + err.message, "error");
         }
-
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, 'Egresos Insumos');
-
-        const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-        const blob = new Blob([wbout], { type: 'application/octet-stream' });
-        this._m_descargarBlob(blob, `Egresos_Insumos_${new Date().toISOString().split('T')[0]}.xlsx`);
-        this.m_notificarAlerta("Reporte Excel generado con éxito.", 'exito');
     }
 };
 

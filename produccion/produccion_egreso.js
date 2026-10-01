@@ -3,7 +3,11 @@
  * AgroSoft J&L - "Apple Soft Studio" Edition / Tipografía Roboto
  * Mode: Local-First (Engine SQLite IPC) + "No me quites nada" + Max(registro)+1 + sincronizado = 0
  */
-const ModuloEgresosProd = {
+window._normalizarTextoProd = window._normalizarTextoProd || function(txt) {
+    return (txt || '').toString().replace(/\s+/g, ' ').trim().toUpperCase();
+};
+
+window.ModuloEgresosProd = {
     datosAcopio: [],
     datosEgresos: [],
     datosMovimientos: [],
@@ -12,9 +16,8 @@ const ModuloEgresosProd = {
     filtroEstablecimiento: '',
     filtroCultivo: '',
     buscadorTexto: '',
-    vistaActualEgresos: 'TODOS', // 'TODOS' | 'PENDIENTES_DEVOLUCION' | 'HISTORIAL_DEVOLUCIONES'
+    vistaActualEgresos: 'TODOS',
 
-    // Helper IPC para ejecutar consultas SQL en la base SQLite local
     m_ejecutarSqlLocal: async function(sql, params = []) {
         if (window.apiLocal && window.apiLocal.query) {
             return await window.apiLocal.query({ sql, params });
@@ -30,12 +33,12 @@ const ModuloEgresosProd = {
         if (!modal) {
             const modalHTML = `
                 <div id="modal-agrosoft" class="modal-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(18, 22, 28, 0.48); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); z-index: 99999; justify-content: center; align-items: center; padding: 20px; box-sizing: border-box;">
-                    <div class="modal-apple-content" style="background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 14px; padding: 24px; width: 95%; max-width: 900px; max-height: 90vh; color: #1D1D1F; box-shadow: 0 10px 25px rgba(0,0,0,0.15); display: flex; flex-direction: column; position: relative;">
-                        <div class="modal-header-apple" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #E0DCD4; padding-bottom: 12px; flex-shrink: 0;">
+                    <div class="modal-apple-content" style="background: #FFFFFF; border: 1.5px solid #E0DCD4; border-radius: 14px; padding: 24px; width: 95%; max-width: 920px; max-height: 92vh; color: #1D1D1F; box-shadow: 0 10px 25px rgba(0,0,0,0.15); display: flex; flex-direction: column; position: relative;">
+                        <div class="modal-header-apple" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; border-bottom: 1px solid #E0DCD4; padding-bottom: 10px; flex-shrink: 0;">
                             <h3 id="modal-titulo" style="margin: 0; font-size: 1.15rem; font-weight: 800; font-family: 'Roboto', sans-serif; color: #123F2C; letter-spacing: -0.3px;">REGISTRO DE DESPACHO</h3>
                             <button onclick="document.getElementById('modal-agrosoft').style.display='none'" style="background: none; border: none; color: #6E6E73; font-size: 1.5rem; font-weight:bold; cursor: pointer;">&times;</button>
                         </div>
-                        <div id="modal-formulario" style="overflow-y: auto; padding-right: 4px;"></div>
+                        <div id="modal-formulario" style="max-height: 78vh; overflow-y: auto; padding-right: 4px;"></div>
                         <div class="modal-apple-footer" id="modal-acciones-footer" style="display: none;"></div>
                     </div>
                 </div>`;
@@ -113,7 +116,6 @@ const ModuloEgresosProd = {
     m_calcularSaldosPrestamos: function() {
         const mapaRemitos = {};
 
-        // 1. Sumar despachos iniciales
         this.datosMovimientos.forEach(m => {
             const tipo = (m.tipo_movimiento || '').trim().toUpperCase();
             if (tipo === 'PRESTAMO_DESPACHO' && m.remito_ref !== null && m.remito_ref !== undefined) {
@@ -137,7 +139,6 @@ const ModuloEgresosProd = {
             }
         });
 
-        // 2. Restar devoluciones vinculadas a remito_dev
         this.datosMovimientos.forEach(m => {
             const tipo = (m.tipo_movimiento || '').trim().toUpperCase();
             if (tipo === 'DEVOLUCION' && m.remito_dev !== null && m.remito_dev !== undefined) {
@@ -149,12 +150,75 @@ const ModuloEgresosProd = {
             }
         });
 
-        // 3. Balance neto
         Object.keys(mapaRemitos).forEach(k => {
             mapaRemitos[k].remanentePendiente = mapaRemitos[k].kilosEnviados - mapaRemitos[k].kilosDevueltos;
         });
 
         return Object.values(mapaRemitos).filter(s => s.remanentePendiente > 0);
+    },
+
+    m_obtenerDatosFiltrados: function() {
+        return this.datosEgresos.filter(e => {
+            if (this.filtroEstablecimiento) {
+                const estE = (e.establecimiento || e.razon_origen || '').trim().toUpperCase();
+                if (estE !== this.filtroEstablecimiento.trim().toUpperCase()) return false;
+            }
+            if (this.filtroCultivo) {
+                if ((e.cultivo || '').trim().toUpperCase() !== this.filtroCultivo.trim().toUpperCase()) return false;
+            }
+            if (this.buscadorTexto) {
+                const txt = this.buscadorTexto.toLowerCase();
+                const matchRem = String(e.remito || '').toLowerCase().includes(txt);
+                const matchCli = (e.cliente || '').toLowerCase().includes(txt);
+                const matchCho = (e.chofer || '').toLowerCase().includes(txt);
+                const matchCult = (e.cultivo || '').toLowerCase().includes(txt);
+                const matchCamp = (e.campo || '').toLowerCase().includes(txt);
+                const matchPat = `${e.patente_1 || ''} ${e.patente_2 || ''}`.toLowerCase().includes(txt);
+                if (!matchRem && !matchCli && !matchCho && !matchCult && !matchCamp && !matchPat) return false;
+            }
+            return true;
+        });
+    },
+
+    m_filtrarEstablecimiento: function(est) {
+        this.filtroEstablecimiento = est || '';
+        this.m_dibujarDashboard();
+    },
+
+    m_filtrarCultivo: function(cult) {
+        this.filtroCultivo = cult || '';
+        this.m_dibujarDashboard();
+    },
+
+    m_filtrarTexto: function(txt) {
+        this.buscadorTexto = txt || '';
+        this.m_dibujarDashboard();
+    },
+
+    m_limpiarFiltros: function() {
+        this.filtroEstablecimiento = '';
+        this.filtroCultivo = '';
+        this.buscadorTexto = '';
+        this.m_dibujarDashboard();
+    },
+
+    m_cambiarEstadoCobro: async function(id, estadoActual) {
+        const nuevoEstado = String(estadoActual).toUpperCase() === 'COBRADO' ? 'PENDIENTE' : 'COBRADO';
+        try {
+            await this.m_ejecutarSqlLocal(
+                `UPDATE egresos_forraje SET estado = ?, sincronizado = 0 WHERE id = ? OR registro = ?`,
+                [nuevoEstado, id, String(id)]
+            );
+            await this.m_inicializar();
+            if (window.ComponentesUI && window.ComponentesUI.notifica) {
+                window.ComponentesUI.notifica(`Estado actualizado a: ${nuevoEstado}`);
+            }
+        } catch (err) {
+            console.error("Error al conmutar estado:", err);
+            if (window.ComponentesUI && window.ComponentesUI.notifica) {
+                window.ComponentesUI.notifica("Error: " + err.message);
+            }
+        }
     },
 
     m_dibujarDashboard: function() {
@@ -164,6 +228,7 @@ const ModuloEgresosProd = {
         const datos = this.m_obtenerDatosFiltrados();
         const totalEgresado = datos.reduce((acc, curr) => acc + (Number(curr.kilos) || 0), 0);
         const totalFacturadoArs = datos.reduce((acc, curr) => acc + (Number(curr.imp_total_ars) || 0), 0);
+        const totalFacturadoUsd = datos.reduce((acc, curr) => acc + (Number(curr.imp_total_usd) || 0), 0);
         
         const prestamosCruzados = this.m_calcularSaldosPrestamos();
         const totalKilosPrestados = prestamosCruzados.reduce((acc, p) => acc + p.remanentePendiente, 0);
@@ -174,17 +239,6 @@ const ModuloEgresosProd = {
 
         visor.innerHTML = `
             <style>
-                :root {
-                    --color-bg: #F5F4F1;
-                    --color-surface: #FFFFFF;
-                    --color-text: #211C16;
-                    --color-text-secondary: #6B6255;
-                    --color-border: #E0DCD4;
-                    --color-plant: #1E6B4C;
-                    --color-plant-dark: #123F2C;
-                    --color-plant-soft: rgba(30, 107, 76, 0.10);
-                }
-
                 .egresos-layout { font-family: 'Roboto', sans-serif; color: #1D1D1F; padding: 8px 18px 25px 18px; }
 
                 .tabs-header-archivero-main {
@@ -210,7 +264,6 @@ const ModuloEgresosProd = {
                     border-radius: 12px; font-size: 0.68rem; font-weight: 800;
                 }
 
-                /* GRID Y TARJETAS KPI REFINADAS */
                 .grid-kpi-egresos {
                     display: grid;
                     grid-template-columns: repeat(4, 1fr);
@@ -232,62 +285,20 @@ const ModuloEgresosProd = {
                     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
                     transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
                 }
-                .kpi-card-egr:hover {
-                    transform: translateY(-2px);
-                    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.06);
-                }
-                .kpi-header-row {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                }
-                .kpi-card-egr .kpi-label {
-                    font-size: 0.62rem;
-                    color: #6B6255;
-                    font-weight: 800;
-                    letter-spacing: 0.5px;
-                    text-transform: uppercase;
-                }
-                .kpi-icon-pill {
-                    width: 26px;
-                    height: 26px;
-                    border-radius: 8px;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    flex-shrink: 0;
-                }
-                .kpi-card-egr .kpi-value {
-                    font-size: 1.25rem;
-                    font-weight: 800;
-                    color: #1D1D1F;
-                    margin: 0;
-                    line-height: 1.15;
-                    letter-spacing: -0.3px;
-                    font-family: 'Roboto', sans-serif;
-                }
-                .kpi-card-egr .kpi-value small {
-                    font-size: 0.7rem;
-                    font-weight: 600;
-                    color: #6B6255;
-                }
-                .kpi-subtext {
-                    font-size: 0.68rem;
-                    color: #8E8E93;
-                    font-weight: 500;
-                    margin-top: 2px;
-                    display: block;
-                }
+                .kpi-card-egr:hover { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(0, 0, 0, 0.06); }
+                .kpi-header-row { display: flex; justify-content: space-between; align-items: center; }
+                .kpi-card-egr .kpi-label { font-size: 0.62rem; color: #6B6255; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; }
+                .kpi-icon-pill { width: 26px; height: 26px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+                .kpi-card-egr .kpi-value { font-size: 1.25rem; font-weight: 800; color: #1D1D1F; margin: 0; line-height: 1.15; letter-spacing: -0.3px; font-family: 'Roboto', sans-serif; }
+                .kpi-card-egr .kpi-value small { font-size: 0.7rem; font-weight: 600; color: #6B6255; }
+                .kpi-subtext { font-size: 0.68rem; color: #8E8E93; font-weight: 500; margin-top: 2px; display: block; }
 
                 .kpi-card-egr.accent-neutral { border-left: 4px solid #4B4F56; }
                 .kpi-card-egr.accent-neutral .kpi-icon-pill { background: #F0F2F5; color: #4B4F56; }
-
                 .kpi-card-egr.accent-blue { border-left: 4px solid #0071E3; }
                 .kpi-card-egr.accent-blue .kpi-icon-pill { background: rgba(0, 113, 227, 0.08); color: #0071E3; }
-
                 .kpi-card-egr.accent-orange { border-left: 4px solid #E08600; }
                 .kpi-card-egr.accent-orange .kpi-icon-pill { background: rgba(224, 134, 0, 0.1); color: #E08600; }
-
                 .kpi-card-egr.accent-green { border-left: 4px solid #1E6B4C; }
                 .kpi-card-egr.accent-green .kpi-icon-pill { background: rgba(30, 107, 76, 0.1); color: #1E6B4C; }
 
@@ -296,7 +307,6 @@ const ModuloEgresosProd = {
                     display: flex; flex-direction: column; gap: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.04);
                 }
 
-                /* CABECERAS FIJAS (STICKY HEADERS) */
                 .wrapper-tabla-scroll-sticky {
                     max-height: calc(100vh - 275px);
                     overflow-y: auto;
@@ -324,6 +334,8 @@ const ModuloEgresosProd = {
                     display: inline-flex; align-items: center; gap: 4px; transition: background 0.15s;
                 }
                 .btn-accion-plant:hover { background: rgba(30,107,76,0.2); }
+                .btn-delete-plant { background: rgba(224,52,42,0.1); border-color: rgba(224,52,42,0.25); color: #E0342A; }
+                .btn-delete-plant:hover { background: rgba(224,52,42,0.2); }
 
                 .badge-cobro-soft {
                     padding: 4px 10px; border-radius: 12px; font-size: 0.65rem; font-weight: 800; cursor: pointer;
@@ -331,6 +343,22 @@ const ModuloEgresosProd = {
                 }
                 .badge-cobro-soft.pendiente { background: rgba(224, 134, 0, 0.1); color: #E08600; border-color: rgba(224, 134, 0, 0.25); }
                 .badge-cobro-soft.cobrado { background: rgba(31, 169, 88, 0.1); color: #1FA958; border-color: rgba(31, 169, 88, 0.25); }
+
+                .led-switch-container { display: inline-flex; background: #EAE8E1; border-radius: 20px; padding: 3px; gap: 4px; border: 1px solid #E0DCD4; }
+                .led-switch-btn { border: none; background: transparent; padding: 6px 14px; border-radius: 16px; font-size: 0.74rem; font-weight: 800; cursor: pointer; display: flex; align-items: center; gap: 6px; color: #6B6255; transition: all 0.2s; font-family:'Roboto'; }
+                .led-switch-btn.active-declarado { background: #1E6B4C; color: #FFFFFF; box-shadow: 0 2px 6px rgba(30,107,76,0.35); }
+                .led-switch-btn.active-nodeclarado { background: #E08600; color: #FFFFFF; box-shadow: 0 2px 6px rgba(224,134,0,0.35); }
+                .led-indicator { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #9CA3AF; }
+                .active-declarado .led-indicator { background: #34D399; box-shadow: 0 0 8px #34D399; }
+                .active-nodeclarado .led-indicator { background: #FDE047; box-shadow: 0 0 8px #FDE047; }
+                
+                .btn-icon-adjunto {
+                    display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; border-radius: 6px; font-size: 0.68rem; font-weight: 800; border: 1px solid #E0DCD4; cursor: pointer; background: #FFFFFF;
+                }
+                .btn-icon-adjunto.cargado { background: #F0FDF4; border-color: #86EFAC; color: #16A34A; }
+                .btn-icon-adjunto.vacio { background: #F8FAFC; border-color: #E2E8F0; color: #94A3B8; }
+                .btn-icon-upload { border: none; background: transparent; cursor: pointer; padding: 0 2px; color: inherit; font-weight: 900; font-size: 0.75rem; }
+                .btn-icon-upload:hover { transform: scale(1.2); }
             </style>
 
             <div class="egresos-layout animated fadeIn">
@@ -375,14 +403,12 @@ const ModuloEgresosProd = {
                     </div>
                 </div>
 
-                <!-- GRID DE KPIS REFINADOS -->
+                <!-- GRID DE KPIS -->
                 <div class="grid-kpi-egresos">
                     <div class="kpi-card-egr accent-neutral">
                         <div class="kpi-header-row">
                             <span class="kpi-label">TOTAL DESPACHADO</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="scale" style="width:14px; height:14px;"></i>
-                            </div>
+                            <div class="kpi-icon-pill"><i data-lucide="scale" style="width:14px; height:14px;"></i></div>
                         </div>
                         <div>
                             <h3 class="kpi-value">${totalEgresado.toLocaleString('es-AR')} <small>KG</small></h3>
@@ -393,9 +419,7 @@ const ModuloEgresosProd = {
                     <div class="kpi-card-egr accent-blue">
                         <div class="kpi-header-row">
                             <span class="kpi-label">ÚLTIMO REMITO</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="file-check" style="width:14px; height:14px;"></i>
-                            </div>
+                            <div class="kpi-icon-pill"><i data-lucide="file-check" style="width:14px; height:14px;"></i></div>
                         </div>
                         <div>
                             <h3 class="kpi-value" style="color:#0071E3;">#${this.datosEgresos[0]?.remito || '---'}</h3>
@@ -406,9 +430,7 @@ const ModuloEgresosProd = {
                     <div class="kpi-card-egr accent-orange">
                         <div class="kpi-header-row">
                             <span class="kpi-label">SALDO INTEREMPRESA</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="arrow-left-right" style="width:14px; height:14px;"></i>
-                            </div>
+                            <div class="kpi-icon-pill"><i data-lucide="arrow-left-right" style="width:14px; height:14px;"></i></div>
                         </div>
                         <div>
                             <h3 class="kpi-value" style="color:#E08600;">${totalKilosPrestados.toLocaleString('es-AR')} <small>KG</small></h3>
@@ -418,14 +440,12 @@ const ModuloEgresosProd = {
 
                     <div class="kpi-card-egr accent-green">
                         <div class="kpi-header-row">
-                            <span class="kpi-label">TOTAL FACTURADO (C/IVA)</span>
-                            <div class="kpi-icon-pill">
-                                <i data-lucide="banknote" style="width:14px; height:14px;"></i>
-                            </div>
+                            <span class="kpi-label">TOTAL VALORIZADO</span>
+                            <div class="kpi-icon-pill"><i data-lucide="banknote" style="width:14px; height:14px;"></i></div>
                         </div>
                         <div>
-                            <h3 class="kpi-value" style="color:#1E6B4C;">$ ${totalFacturadoArs.toLocaleString('es-AR')} <small>ARS</small></h3>
-                            <span class="kpi-subtext">Liquidación contable total</span>
+                            <h3 class="kpi-value" style="color:#1E6B4C;">U$S ${totalFacturadoUsd.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2})}</h3>
+                            <span class="kpi-subtext">$ ${totalFacturadoArs.toLocaleString('es-AR', {maximumFractionDigits:0})} ARS</span>
                         </div>
                     </div>
                 </div>
@@ -453,7 +473,7 @@ const ModuloEgresosProd = {
                     ` : ''}
                 </div>
 
-                <!-- CONTENEDOR DE TABLAS EJECUTIVAS -->
+                <!-- CONTENEDOR DE TABLAS -->
                 <div class="panel-box-plant">
                     ${
                         this.vistaActualEgresos === 'TODOS' ? this.m_renderTablaGeneralEgresos(datos) : 
@@ -465,13 +485,14 @@ const ModuloEgresosProd = {
         if (window.lucide) lucide.createIcons();
     },
 
+    // ESTO LO MODIFIQUE: Render de tabla con Kilos Despachados, Recepción e Índice %
     m_renderTablaGeneralEgresos: function(datos) {
         return `
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <span style="font-size:0.75rem; font-weight:800; color:#123F2C; text-transform:uppercase; letter-spacing:0.4px;">
                     🚚 Remitos y Despachos de Balanza (${datos.length})
                 </span>
-                <span style="font-size:0.72rem; color:#6B6255; font-weight:600;">Cabeceras fijas</span>
+                <span style="font-size:0.72rem; color:#6B6255; font-weight:600;">Auditoría de Báscula y Mermas</span>
             </div>
 
             <div class="wrapper-tabla-scroll-sticky scroll-apple">
@@ -480,11 +501,13 @@ const ModuloEgresosProd = {
                         <tr>
                             <th>Fecha / Hora</th>
                             <th>Remito</th>
+                            <th style="text-align:center;">Comprobantes</th>
                             <th>Cliente Destinatario</th>
                             <th>Origen / Emisora Carta Porte</th>
                             <th>Campaña</th>
                             <th>Cultivo</th>
-                            <th style="text-align:right;">Kilos Brutos</th>
+                            <th style="text-align:right; width:155px;">Balanza Salida / Destino</th>
+                            <th style="text-align:center; width:95px;">Índice Recep.</th>
                             <th>Chofer / Patente</th>
                             <th style="text-align:center;">Estado Cobro</th>
                             <th style="text-align:center;">Acciones</th>
@@ -492,7 +515,7 @@ const ModuloEgresosProd = {
                     </thead>
                     <tbody>
                         ${datos.length === 0 ? `
-                            <tr><td colspan="10" style="text-align:center; padding:35px; color:#9AA0A6; font-style:italic;">No hay despachos registrados para los filtros seleccionados.</td></tr>
+                            <tr><td colspan="12" style="text-align:center; padding:35px; color:#9AA0A6; font-style:italic;">No hay despachos registrados para los filtros seleccionados.</td></tr>
                         ` : datos.map(e => {
                             const regID = e.id || e.registro;
                             const statusCobro = (e.estado || 'PENDIENTE').toUpperCase();
@@ -501,31 +524,104 @@ const ModuloEgresosProd = {
                             const emisoraCarta = e.razon_emisora || origenStk;
                             const esPrestamo = origenStk.trim().toUpperCase() !== emisoraCarta.trim().toUpperCase();
 
+                            const esDeclarado = (e.despacho || 'DECLARADO').toUpperCase() === 'DECLARADO';
+                            const tieneRemitoAdjunto = e.foto_remito && String(e.foto_remito).trim() !== '';
+                            const tieneCartaAdjunta = e.foto_carta && String(e.foto_carta).trim() !== '';
+
+                            // =========================================================================
+                            // ACA ES LO NUEVO: Cálculo de Despacho vs Recepción e Índice Porcentual
+                            // =========================================================================
+                            const kgDespachados = Number(e.kilos || 0);
+                            const kgRecepcionados = Number(e.cant_recepcionada !== null && e.cant_recepcionada !== undefined ? e.cant_recepcionada : e.kilos) || 0;
+                            const difKilos = kgRecepcionados - kgDespachados;
+                            
+                            let pctRecep = 100;
+                            if (kgDespachados > 0) {
+                                pctRecep = (kgRecepcionados / kgDespachados) * 100;
+                            }
+
+                            // Color de alerta según el % recibido
+                            let colorPct = '#1FA958'; // Verde (100% o más)
+                            let bgPct = 'rgba(31, 169, 88, 0.12)';
+                            if (pctRecep < 98) {
+                                colorPct = '#E0342A'; // Rojo (merma notable)
+                                bgPct = 'rgba(224, 52, 42, 0.12)';
+                            } else if (pctRecep < 99.5) {
+                                colorPct = '#E08600'; // Naranja (merma tolerable)
+                                bgPct = 'rgba(224, 134, 0, 0.12)';
+                            }
+
                             return `
                                 <tr>
                                     <td>${e.fecha || ''}<br><small style="color:#6B6255;">${e.hora || ''}</small></td>
-                                    <td><strong style="color:#0071E3; font-size:0.85rem;">#${e.remito || '---'}</strong></td>
+                                    <td>
+                                        <strong style="color:#0071E3; font-size:0.85rem;">#${e.remito || '---'}</strong>${!esDeclarado ? `<span style="display:block; font-size:0.6rem; color:#E08600; font-weight:800;">NO DECLARADO</span>` : ''}
+                                    </td>
+
+                                    <!-- COMPROBANTES CON RUTA CORREGIDA -->
+                                    <td style="text-align:center; white-space:nowrap;">
+                                        <div style="display:inline-flex; gap:5px; align-items:center;">
+                                            <div class="btn-icon-adjunto ${tieneRemitoAdjunto ? 'cargado' : 'vacio'}" title="${tieneRemitoAdjunto ? 'Ver Archivo Físico' : 'Generar / Imprimir Remito'}">
+                                                <span onclick="${tieneRemitoAdjunto ? `ModuloEgresosProd.m_abrirArchivo('${e.foto_remito}')` : `ModuloEgresosProd.m_imprimirRemitoOficialDesdeLista(${regID})`}" style="cursor:pointer; display:inline-flex; align-items:center; gap:2px;">
+                                                    <i data-lucide="file-text" style="width:12px; height:12px;"></i> ${tieneRemitoAdjunto ? 'REM' : '🖨️ REM'}
+                                                </span>
+                                                <button type="button" class="btn-icon-upload" onclick="ModuloEgresosProd.m_subirAdjuntoDirecto(${regID}, 'foto_remito', 'REMITO_PROD')" title="Actualizar / Reemplazar Remito">+</button>
+                                            </div>
+
+                                            ${esDeclarado ? `
+                                                <div class="btn-icon-adjunto ${tieneCartaAdjunta ? 'cargado' : 'vacio'}" title="${tieneCartaAdjunta ? 'Ver Carta Porte' : 'Sin Carta Porte'}">
+                                                    <span onclick="${tieneCartaAdjunta ? `ModuloEgresosProd.m_abrirArchivo('${e.foto_carta}')` : `ModuloEgresosProd.m_subirAdjuntoDirecto(${regID}, 'foto_carta', 'CARTA_PORTE_PROD')`}" style="cursor:pointer; display:inline-flex; align-items:center; gap:2px;">
+                                                        <i data-lucide="file-spreadsheet" style="width:12px; height:12px;"></i> CP
+                                                    </span>
+                                                    <button type="button" class="btn-icon-upload" onclick="ModuloEgresosProd.m_subirAdjuntoDirecto(${regID}, 'foto_carta', 'CARTA_PORTE_PROD')" title="Actualizar / Cargar Carta Porte">+</button>
+                                                </div>
+                                            ` : ''}
+                                        </div>
+                                    </td>
+
                                     <td><strong>${(e.cliente || 'S/D').toUpperCase()}</strong></td>
                                     <td>
-                                        <strong>${origenStk}</strong>
-                                        ${esPrestamo ? `<br><span style="color:#E08600; font-weight:700; font-size:0.68rem;">⚠️ Emite: ${emisoraCarta}</span>` : `<br><small style="color:#6B6255;">(Dep/Silo: ${e.deposito || 'G-General'})</small>`}
+                                        <strong>${origenStk}</strong>${esPrestamo ? `<br><span style="color:#E08600; font-weight:700; font-size:0.68rem;">⚠️ Emite: ${emisoraCarta}</span>` : `<br><small style="color:#6B6255;">(Dep/Silo: ${e.deposito || 'G-General'})</small>`}
                                     </td>
                                     <td>${e.campaña || '---'}</td>
                                     <td><strong style="color:#123F2C;">🌱 ${(e.cultivo || 'S/D').toUpperCase()}</strong></td>
-                                    <td style="text-align:right; font-weight:800; color:#E0342A; font-family:monospace;">-${Number(e.kilos || 0).toLocaleString('es-AR')} kg</td>
-                                    <td>${e.chofer || '---'}<br><small style="color:#6B6255;">Pat: ${e.patente_1 || '---'}</small></td>
+
+                                    <!-- KILOS DESPACHADOS VS DESTINO CON MERMA -->
+                                    <td style="text-align:right; white-space:nowrap; font-family:monospace; line-height:1.35;">
+                                        <div style="font-weight:800; color:#DC2626;" title="Kilos Salida Balanza">
+                                            Sal: -${kgDespachados.toLocaleString('es-AR')} kg
+                                        </div>
+                                        <div style="font-weight:700; color:#16A34A;" title="Kilos Recepción Destino">
+                                            Rec: +${kgRecepcionados.toLocaleString('es-AR')} kg
+                                        </div>
+                                        <small style="color:${difKilos < 0 ? '#DC2626' : (difKilos > 0 ? '#16A34A' : '#6B6255')}; font-size:0.68rem;">
+                                            ${difKilos !== 0 ? (difKilos > 0 ? `+${difKilos.toLocaleString('es-AR')} kg` : `${difKilos.toLocaleString('es-AR')} kg dif`) : 'Sin merma'}
+                                        </small>
+                                    </td>
+
+                                    <!-- ÍNDICE % RECEPCIÓN / EGRESO -->
+                                    <td style="text-align:center; white-space:nowrap;">
+                                        <span style="display:inline-block; padding:3px 8px; border-radius:12px; font-weight:900; font-family:monospace; font-size:0.75rem; color:${colorPct}; background:${bgPct}; border:1px solid${colorPct}33;" title="Porcentaje recibido sobre lo despachado">
+                                            ${pctRecep.toFixed(2)}%
+                                        </span>
+                                    </td>
+
+                                    <td>${e.chofer || '---'}<br><small style="color:#6B6255;">Pat: ${e.patente_1 || '---'}${e.patente_2 ? '/ ' + e.patente_2 : ''}</small></td>
                                     <td style="text-align:center;">
                                         <span class="badge-cobro-soft ${claseStatus}" onclick="ModuloEgresosProd.m_cambiarEstadoCobro(${regID}, '${statusCobro}')" title="Tocá para cambiar estado">
                                             ${statusCobro}
                                         </span>
                                     </td>
-                                    <td style="text-align:center;">
+                                    <td style="text-align:center; white-space:nowrap;">
                                         <div style="display:inline-flex; gap:4px; align-items:center;">
-                                            <button class="btn-accion-plant" onclick="ModuloEgresosProd.m_verDetalleRemito(${regID})" title="Ver Remito Digital">
+                                            <button class="btn-accion-plant" onclick="ModuloEgresosProd.m_verDetalleRemito(${regID})" title="Ver Resumen Completo">
                                                 👁️
                                             </button>
                                             <button class="btn-accion-plant" onclick="ModuloEgresosProd.m_abrirModalEgreso(${regID})" title="Editar Remito">
                                                 ✏️
+                                            </button>
+                                            <button class="btn-accion-plant btn-delete-plant" onclick="ModuloEgresosProd.m_solicitarBorrado('${e.id}', '${e.remito}', ${e.kilos || 0}, '${e.deposito}')" title="Revertir y Restaurar Stock">
+                                                🗑️
                                             </button>
                                         </div>
                                     </td>
@@ -628,61 +724,133 @@ const ModuloEgresosProd = {
         `;
     },
 
-    m_obtenerDatosFiltrados: function() {
-        return this.datosEgresos.filter(e => {
-            if (this.filtroEstablecimiento) {
-                const estE = (e.establecimiento || e.razon_origen || '').trim().toUpperCase();
-                if (estE !== this.filtroEstablecimiento.trim().toUpperCase()) return false;
+    m_abrirArchivo: async function(rutaOUrl) {
+    if (!rutaOUrl) return alert("No hay archivo adjunto registrado.");
+
+    // Si todavía figura como URL web directa
+    if (rutaOUrl.startsWith('http://') || rutaOUrl.startsWith('https://')) {
+        window.open(rutaOUrl, '_blank');
+        return;
+    }
+
+    // Si es archivo local descargado
+    if (window.electronAPI && window.electronAPI.invoke) {
+        const ok = await window.electronAPI.invoke('abrir-archivo-local', rutaOUrl);
+        if (!ok) {
+            alert("No se encontró el archivo en la ruta local:\n" + rutaOUrl);
+        }
+    } else {
+        window.open(rutaOUrl, '_blank');
+    }
+},
+
+    m_calcularSiguienteNoDeclarado: async function() {
+        const anoActual = new Date().getFullYear();
+        const prefijo = String(anoActual);
+        const res = await this.m_ejecutarSqlLocal(
+            `SELECT remito FROM egresos_forraje WHERE remito LIKE '${prefijo}%' AND despacho = 'NO DECLARADO' ORDER BY remito DESC LIMIT 1`
+        );
+        const ultimo = res.data?.[0]?.remito || res[0]?.remito;
+        let secuencia = 1;
+        if (ultimo) {
+            const sufijo = String(ultimo).slice(prefijo.length);
+            const num = parseInt(sufijo);
+            if (!isNaN(num)) secuencia = num + 1;
+        }
+        return `${prefijo}${String(secuencia).padStart(5, '0')}`;
+    },
+
+    m_conmutarLedDespacho: async function(tipo) {
+        const btnDec = document.getElementById('btn-led-declarado-pegr');
+        const btnNoDec = document.getElementById('btn-led-nodeclarado-pegr');
+        const inputRemito = document.getElementById('e_remito');
+        const hiddenTipo = document.getElementById('e_tipo_despacho');
+        const contenedorCarta = document.getElementById('box-adjunto-carta-prod');
+
+        if (tipo === 'DECLARADO') {
+            btnDec.className = 'led-switch-btn active-declarado';
+            btnNoDec.className = 'led-switch-btn';
+            hiddenTipo.value = 'DECLARADO';
+            inputRemito.readOnly = false;
+            inputRemito.style.background = '#FFFFFF';
+            inputRemito.placeholder = "Ingrese remito físico...";
+            if (contenedorCarta) contenedorCarta.style.display = 'block';
+        } else {
+            btnDec.className = 'led-switch-btn';
+            btnNoDec.className = 'led-switch-btn active-nodeclarado';
+            hiddenTipo.value = 'NO DECLARADO';
+            inputRemito.readOnly = true;
+            inputRemito.style.background = '#FEF3C7';
+            inputRemito.value = await this.m_calcularSiguienteNoDeclarado();
+            if (contenedorCarta) contenedorCarta.style.display = 'none';
+        }
+    },
+
+    // Selector con copia física en data_despachos/produccion/despachos_media
+    m_seleccionarArchivoLocal: async function(inputId, previewSpanId, prefijo = 'REMITO') {
+        const remitoActual = (document.getElementById('e_remito')?.value || 'PENDIENTE').trim();
+        const preview = document.getElementById(previewSpanId);
+
+        if (window.electronAPI && window.electronAPI.invoke) {
+            try {
+                if (preview) preview.innerHTML = `⏳ Abriendo explorador...`;
+
+                const res = await window.electronAPI.invoke('seleccionar-y-copiar-despacho', {
+                    prefijo: prefijo,
+                    remitoNum: remitoActual
+                });
+
+                if (res.canceled) {
+                    if (preview && !document.getElementById(inputId).value) {
+                        preview.innerHTML = `Sin archivo`;
+                    }
+                    return;
+                }
+
+                if (res.success) {
+                    document.getElementById(inputId).value = res.rutaBD;
+                    if (preview) {
+                        preview.innerHTML = `✅ Guardado: ${res.nombreArchivo}`;
+                        preview.title = res.rutaBD;
+                    }
+                } else {
+                    alert("Error al copiar archivo físico: " + res.error);
+                    if (preview) preview.innerHTML = `❌ Error de copia`;
+                }
+            } catch (err) {
+                console.error("Fallo IPC al copiar despacho:", err);
+                alert("Error al invocar copiado nativo: " + err.message);
             }
-            if (this.filtroCultivo) {
-                if ((e.cultivo || '').trim().toUpperCase() !== this.filtroCultivo.trim().toUpperCase()) return false;
-            }
-            if (this.buscadorTexto) {
-                const txt = this.buscadorTexto.toLowerCase();
-                const matchRem = String(e.remito || '').toLowerCase().includes(txt);
-                const matchCli = (e.cliente || '').toLowerCase().includes(txt);
-                const matchCho = (e.chofer || '').toLowerCase().includes(txt);
-                const matchCult = (e.cultivo || '').toLowerCase().includes(txt);
-                const matchCamp = (e.campo || '').toLowerCase().includes(txt);
-                if (!matchRem && !matchCli && !matchCho && !matchCult && !matchCamp) return false;
-            }
-            return true;
-        });
+        } else {
+            alert("Atención: No se detectó el entorno nativo de Electron.");
+        }
     },
 
-    m_filtrarEstablecimiento: function(est) {
-        this.filtroEstablecimiento = est || '';
-        this.m_dibujarDashboard();
-    },
+    m_subirAdjuntoDirecto: async function(regId, campoColumna, prefijo) {
+        if (!window.electronAPI || !window.electronAPI.invoke) {
+            return alert("Función nativa solo disponible en Electron.");
+        }
 
-    m_filtrarCultivo: function(cult) {
-        this.filtroCultivo = cult || '';
-        this.m_dibujarDashboard();
-    },
-
-    m_filtrarTexto: function(txt) {
-        this.buscadorTexto = txt || '';
-        this.m_dibujarDashboard();
-    },
-
-    m_limpiarFiltros: function() {
-        this.filtroEstablecimiento = '';
-        this.filtroCultivo = '';
-        this.buscadorTexto = '';
-        this.m_dibujarDashboard();
-    },
-
-    m_cambiarEstadoCobro: async function(id, estadoActual) {
-        const nuevoEstado = estadoActual === 'COBRADO' ? 'PENDIENTE' : 'COBRADO';
         try {
+            const res = await window.electronAPI.invoke('seleccionar-y-copiar-despacho', {
+                prefijo: prefijo,
+                remitoNum: regId
+            });
+
+            if (res.canceled || !res.success) return;
+
             await this.m_ejecutarSqlLocal(
-                `UPDATE egresos_forraje SET estado = ?, sincronizado = 0 WHERE id = ? OR registro = ?`,
-                [nuevoEstado, id, String(id)]
+                `UPDATE egresos_forraje SET ${campoColumna} = ?, sincronizado = 0 WHERE id = ? OR registro = ?`,
+                [res.rutaBD, regId, String(regId)]
             );
+
             await this.m_inicializar();
+
+            if (window.ComponentesUI && window.ComponentesUI.notifica) {
+                window.ComponentesUI.notifica("✅ Archivo físico copiado y asignado.");
+            }
         } catch (err) {
-            console.error("Error al conmutar estado:", err);
-            if(window.ComponentesUI) window.ComponentesUI.notifica("Error al conmutar estado: " + err.message);
+            alert("Error al adjuntar comprobante: " + err.message);
         }
     },
 
@@ -693,7 +861,7 @@ const ModuloEgresosProd = {
         const footerAcciones = document.getElementById('modal-acciones-footer');
         const modalContent = document.querySelector('.modal-apple-content');
         
-        if (modalContent) modalContent.style.maxWidth = '850px';
+        if (modalContent) modalContent.style.maxWidth = '920px';
         if (modal) modal.style.display = 'flex';
         if (footerAcciones) footerAcciones.style.display = 'none';
 
@@ -701,35 +869,54 @@ const ModuloEgresosProd = {
         document.getElementById('modal-titulo').innerText = regEdicion ? `MODIFICAR EGRESO / REMITO N° ${regEdicion.remito}` : 'NUEVO DESPACHO DE FORRAJE';
 
         const silosConStock = this.listaAcopioCalculado.filter(s => s.kg_disponibles_reales > 0 || regEdicion);
+        const tipoInicial = regEdicion?.despacho || 'DECLARADO';
+        const esDeclarado = tipoInicial === 'DECLARADO';
 
         container.innerHTML = `
             <div style="display:flex; flex-direction:column; gap:12px; font-family:'Roboto', sans-serif;">
-                <div style="background: #F8FAFC; border: 1px solid #E0DCD4; padding: 14px; border-radius: 12px; display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                <!-- CONMUTADOR LED DECLARADO / NO DECLARADO -->
+                <div style="display:flex; justify-content:space-between; align-items:center; background:#F8FAFC; border:1px solid #E0DCD4; padding:10px 14px; border-radius:10px;">
                     <div>
-                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Silo / Depósito Origen (Propietario Cereal)</label>
-                        <select id="e_silo_sel" onchange="ModuloEgresosProd.m_autoCompletarSilo(this.value)" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; background:#FFFFFF; cursor:pointer;">
-                            <option value="">Seleccione origen...</option>
+                        <span style="font-size:0.68rem; font-weight:800; color:#123F2C; text-transform:uppercase;">Condición de Despacho:</span>
+                        <small style="display:block; font-size:0.7rem; color:#6B6255;">Define comprobantes exigidos y tipo de remito</small>
+                    </div>
+                    <div class="led-switch-container">
+                        <input type="hidden" id="e_tipo_despacho" value="${tipoInicial}">
+                        <button type="button" id="btn-led-declarado-pegr" class="led-switch-btn ${esDeclarado ? 'active-declarado' : ''}" onclick="ModuloEgresosProd.m_conmutarLedDespacho('DECLARADO')">
+                            <span class="led-indicator"></span> DECLARADO
+                        </button>
+                        <button type="button" id="btn-led-nodeclarado-pegr" class="led-switch-btn ${!esDeclarado ? 'active-nodeclarado' : ''}" onclick="ModuloEgresosProd.m_conmutarLedDespacho('NO DECLARADO')">
+                            <span class="led-indicator"></span> NO DECLARADO
+                        </button>
+                    </div>
+                </div>
+
+                <div style="background: #F8FAFC; border: 1.5px solid #E0DCD4; padding: 14px; border-radius: 12px; display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div>
+                        <label style="font-size:0.65rem; color:#6B6255; font-weight:800; text-transform:uppercase; display:block; margin-bottom:4px;">Silo / Depósito Origen</label>
+                        <select id="e_silo_sel" onchange="ModuloEgresosProd.m_autoCompletarSilo(this.value)" style="width:100%; padding:9px 12px; border-radius:8px; border:1.5px solid #1E6B4C; font-size:0.85rem; background:#FFFFFF; font-weight:600; cursor:pointer; outline:none;">
+                            <option value="">Seleccione silo o depósito...</option>
                             ${silosConStock.map(s => `
-                                <option value="${s.registro_aco}" ${regEdicion && String(regEdicion.deposito) === String(s.silo_n || s.registro_aco) ? 'selected' : ''}>
-                                    ${s.establecimiento} - ${s.campo} - ${s.silo_n ? 'Silo ' + s.silo_n : 'Dep: ' + s.deposito} (${s.cultivo}) [Disp: ${s.kg_disponibles_reales.toLocaleString('es-AR')} kg]
+                                <option value="${s.registro_aco}" ${regEdicion && String(regEdicion.deposito) === String(s.silo_n || s.registro_aco) ? 'selected' : ''}>${s.establecimiento} - ${s.campo} -${s.silo_n ? 'Silo ' + s.silo_n : 'Dep: ' + s.deposito} (${s.cultivo}) [Disp:${s.kg_disponibles_reales.toLocaleString('es-AR')} kg]
                                 </option>`).join('')}
                         </select>
                     </div>
 
                     <div>
                         <label style="font-size:0.65rem; color:#1E6B4C; font-weight:800; text-transform:uppercase; display:block; margin-bottom:4px;">Empresa Emisora de Carta de Porte</label>
-                        <select id="e_razon_emisora" style="width:100%; padding:8px 10px; border-radius:8px; border:1.5px solid #1E6B4C; font-size:0.85rem; background:#FFFFFF; font-weight:bold; cursor:pointer;">
+                        <select id="e_razon_emisora" style="width:100%; padding:9px 12px; border-radius:8px; border:1.5px solid #E0DCD4; font-size:0.85rem; background:#FFFFFF; font-weight:700; cursor:pointer; outline:none;">
                             ${this.empresasEmisoras.map(emp => `
                                 <option value="${emp}" ${regEdicion?.razon_emisora === emp ? 'selected' : ''}>${emp}</option>
                             `).join('')}
+                            <option value="PROPIO" ${regEdicion?.razon_emisora === 'PROPIO' ? 'selected' : ''}>PROPIO</option>
                         </select>
                     </div>
                 </div>
 
-                <div style="background: #F8FAFC; border: 1px solid #E0DCD4; padding: 14px; border-radius: 12px; display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                <div style="background: #F8FAFC; border: 1px solid #E0DCD4; padding: 14px; border-radius: 12px; display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;">
                     <div>
                         <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Remito N°</label>
-                        <input type="number" id="e_remito" value="${regEdicion?.remito || ''}" placeholder="Ej: 4501" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
+                        <input type="text" id="e_remito" value="${regEdicion?.remito || ''}" ${!esDeclarado ? 'readonly style="background:#FEF3C7;"' : ''} placeholder="Ej: 4501" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box; font-weight:bold;">
                     </div>
                     <div>
                         <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Cliente Comprador</label>
@@ -739,26 +926,13 @@ const ModuloEgresosProd = {
                         <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Chofer Transportista</label>
                         <input type="text" id="e_chofer" value="${regEdicion?.chofer || ''}" placeholder="Nombre del chofer" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
                     </div>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-                        <div>
-                            <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Patente Chasis</label>
-                            <input type="text" id="e_patente1" value="${regEdicion?.patente_1 || ''}" placeholder="AA123BB" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
-                        </div>
-                        <div>
-                            <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Patente Acoplado</label>
-                            <input type="text" id="e_patente2" value="${regEdicion?.patente_2 || ''}" placeholder="CC456DD" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
-                        </div>
-                    </div>
-                </div>
-
-                <div style="background: #F8FAFC; border: 1px solid #E0DCD4; padding: 14px; border-radius: 12px; display:grid; grid-template-columns:repeat(3, 1fr); gap:12px;">
                     <div>
-                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Precio Unit. U$S</label>
-                        <input type="number" step="0.001" id="e_imp_uni_dolar" value="${regEdicion?.imp_uni_dolar || '0'}" oninput="ModuloEgresosProd.m_recalcularMontoPro()" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
+                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Patente Chasis</label>
+                        <input type="text" id="e_patente1" value="${regEdicion?.patente_1 || ''}" placeholder="AA123BB" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
                     </div>
                     <div>
-                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Cotización Dólar</label>
-                        <input type="number" id="e_cotizacion" value="${regEdicion?.cotizacion || '1200'}" oninput="ModuloEgresosProd.m_recalcularMontoPro()" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
+                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Patente Acoplado</label>
+                        <input type="text" id="e_patente2" value="${regEdicion?.patente_2 || ''}" placeholder="CC456DD" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
                     </div>
                     <div>
                         <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Alícuota IVA</label>
@@ -769,19 +943,66 @@ const ModuloEgresosProd = {
                     </div>
                 </div>
 
-                <div style="background:#F8FAFC; border:1px solid #E0DCD4; padding:10px 14px; border-radius:10px; font-size:0.75rem; color:#6B6255;" id="e_info_stock">
-                    Seleccione un silo/depósito para consultar el saldo real...
+                <!-- CONTENEDOR DE ADJUNTOS CONDICIONAL -->
+                <div style="background:#F8FAFC; border:1px solid #E0DCD4; padding:14px; border-radius:12px; display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                    <div>
+                        <label style="font-size:0.65rem; color:#123F2C; font-weight:800; text-transform:uppercase; display:block; margin-bottom:4px;">Adjuntar Remito Digital</label>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <button type="button" class="btn-icon-adjunto" onclick="ModuloEgresosProd.m_seleccionarArchivoLocal('e_foto_remito', 'prev_remito_txt_prod', 'REMITO_PROD')">
+                                📁 Buscar Remito
+                            </button>
+                            <span id="prev_remito_txt_prod" style="font-size:0.72rem; color:#6B6255; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">
+                                ${regEdicion?.foto_remito ? '✅ ' + regEdicion.foto_remito : 'Sin archivo'}
+                            </span>
+                        </div>
+                        <input type="hidden" id="e_foto_remito" value="${regEdicion?.foto_remito || ''}">
+                    </div>
+
+                    <div id="box-adjunto-carta-prod" style="${!esDeclarado ? 'display:none;' : ''}">
+                        <label style="font-size:0.65rem; color:#123F2C; font-weight:800; text-transform:uppercase; display:block; margin-bottom:4px;">Adjuntar Carta de Porte</label>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <button type="button" class="btn-icon-adjunto" onclick="ModuloEgresosProd.m_seleccionarArchivoLocal('e_foto_carta', 'prev_carta_txt_prod', 'CARTA_PORTE_PROD')">
+                                📁 Buscar Carta Porte
+                            </button>
+                            <span id="prev_carta_txt_prod" style="font-size:0.72rem; color:#6B6255; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">
+                                ${regEdicion?.foto_carta ? '✅ ' + regEdicion.foto_carta : 'Sin archivo'}
+                            </span>
+                        </div>
+                        <input type="hidden" id="e_foto_carta" value="${regEdicion?.foto_carta || ''}">
+                    </div>
+                </div>
+
+                <div style="background: #F8FAFC; border: 1px solid #E0DCD4; padding: 14px; border-radius: 12px; display:grid; grid-template-columns:repeat(2, 1fr); gap:12px;">
+                    <div>
+                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Precio Unit. U$S</label>
+                        <input type="number" step="0.001" id="e_imp_uni_dolar" value="${regEdicion?.imp_uni_dolar || '0'}" oninput="ModuloEgresosProd.m_recalcularMontoPro()" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.65rem; color:#6B6255; font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px;">Cotización Dólar</label>
+                        <input type="number" id="e_cotizacion" value="${regEdicion?.cotizacion || '1200'}" oninput="ModuloEgresosProd.m_recalcularMontoPro()" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; box-sizing:border-box;">
+                    </div>
+                </div>
+
+                <!-- STOCK RESTANTE VISIBLE EN TIEMPO REAL -->
+                <div style="background:#F8FAFC; border:1.5px solid #E0DCD4; padding:12px 16px; border-radius:10px; font-size:0.78rem; color:#6B6255; display:flex; justify-content:space-between; align-items:center;" id="e_info_stock">
+                    <span>Seleccione un silo/depósito para calibrar el stock...</span>
+                </div>
+
+                <!-- BÁSCULA: SALIDA VS RECEPCIÓN DESTINO -->
+                <div style="background:#FFFFFF; border:2px solid #E0DCD4; border-radius:12px; padding:14px; display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                    <div style="background:#FFFDFD; border:1.5px solid #FCA5A5; padding:10px; border-radius:8px;">
+                        <label style="color:#DC2626; font-weight:800; font-size:0.68rem; text-transform:uppercase; display:block;">Kilos Despachados (Salida Balanza)</label>
+                        <input type="number" id="e_kilos" value="${regEdicion?.kilos || ''}" oninput="ModuloEgresosProd.m_validarEgreso(); ModuloEgresosProd.m_recalcularMontoPro();" placeholder="0" style="width:100%; border:none; background:transparent; font-size:1.35rem; font-weight:800; color:#DC2626; outline:none; font-family:monospace;">
+                    </div>
+                    <div style="background:#F0FDF4; border:1.5px solid #86EFAC; padding:10px; border-radius:8px;">
+                        <label style="color:#16A34A; font-weight:800; font-size:0.68rem; text-transform:uppercase; display:block;">Kilos Recepcionados (Balanza Destino)</label>
+                        <input type="number" id="e_cant_recepcionada" value="${regEdicion?.cant_recepcionada || regEdicion?.kilos || ''}" placeholder="0" style="width:100%; border:none; background:transparent; font-size:1.35rem; font-weight:800; color:#16A34A; outline:none; font-family:monospace;">
+                    </div>
                 </div>
 
                 <div style="background:rgba(30,107,76,0.08); border:1px solid rgba(30,107,76,0.25); border-radius:10px; padding:12px 16px; display:flex; justify-content:space-between; align-items:center;">
-                    <div>
-                        <label style="color:#E0342A; font-weight:800; font-size:0.68rem; display:block; margin-bottom:2px; text-transform:uppercase;">Kilos a Despachar</label>
-                        <input type="number" id="e_kilos" value="${regEdicion?.kilos || ''}" oninput="ModuloEgresosProd.m_validarEgreso(); ModuloEgresosProd.m_recalcularMontoPro();" placeholder="0" style="background:transparent; border:none; color:#123F2C; font-size:1.4rem; font-weight:800; outline:none; width:180px;">
-                    </div>
-                    <div style="text-align:right;">
-                        <small style="color:#1E6B4C; font-weight:700; font-size:0.65rem; display:block; text-transform:uppercase;">Total Liquidado Factura (C/IVA)</small>
-                        <strong style="font-size:1.25rem; color:#1E6B4C;" id="display_total_pesos_egr">$ 0</strong>
-                    </div>
+                    <small style="color:#1E6B4C; font-weight:700; font-size:0.75rem; text-transform:uppercase;">Total Liquidado Factura (C/IVA):</small>
+                    <strong style="font-size:1.3rem; color:#1E6B4C; font-family:monospace;" id="display_total_pesos_egr">$ 0</strong>
                 </div>
 
                 <input type="hidden" id="e_establecimiento" value="${regEdicion?.establecimiento || ''}">
@@ -795,8 +1016,8 @@ const ModuloEgresosProd = {
                 <input type="hidden" id="e_estado_valor" value="${regEdicion?.estado || 'PENDIENTE'}">
 
                 <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:8px; border-top:1px solid #E0DCD4; padding-top:12px;">
-                    <button onclick="document.getElementById('modal-agrosoft').style.display='none'" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:9px 18px; border-radius:8px; font-weight:700; font-size:0.8rem; cursor:pointer;">CANCELAR</button>
-                    <button id="btn-guardar-egreso-local" style="background:#1E6B4C; color:#FFF; border:none; padding:9px 22px; border-radius:8px; font-weight:700; font-size:0.8rem; cursor:pointer;">
+                    <button type="button" onclick="document.getElementById('modal-agrosoft').style.display='none'" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:9px 18px; border-radius:8px; font-weight:700; font-size:0.8rem; cursor:pointer;">CANCELAR</button>
+                    <button type="button" id="btn-guardar-egreso-local" style="background:#1E6B4C; color:#FFF; border:none; padding:9px 22px; border-radius:8px; font-weight:700; font-size:0.8rem; cursor:pointer;">
                         ${regEdicion ? 'CONFIRMAR MODIFICACIÓN' : 'CONFIRMAR DESPACHO'}
                     </button>
                 </div>
@@ -805,7 +1026,7 @@ const ModuloEgresosProd = {
         document.getElementById('btn-guardar-egreso-local').onclick = () => ModuloEgresosProd.m_guardarTodo();
         
         if (regEdicion) {
-            this.m_autoCompletarSilo(this.listaAcopioCalculado.find(s => s.cultivo == regEdicion.cultivo)?.registro_aco || '');
+            this.m_autoCompletarSilo(this.listaAcopioCalculado.find(s => s.cultivo == regEdicion.cultivo)?.registro_aco || regEdicion.deposito || '');
             this.m_recalcularMontoPro();
         } else {
             this.m_validarEgreso();
@@ -824,18 +1045,37 @@ const ModuloEgresosProd = {
         document.getElementById('e_variedad').value = silo.variedad || '';
         document.getElementById('e_stock_limite').value = silo.kg_disponibles_reales || 0;
         
-        document.getElementById('e_info_stock').innerHTML = `
-            Establecimiento: <b>${silo.establecimiento}</b> &bull; Campo: <b>${silo.campo}</b> &bull; Stock Neto Disponible: <b style="color:#1FA958;">${Number(silo.kg_disponibles_reales).toLocaleString('es-AR')} KG</b>
-        `;
+        this.m_actualizarVistaStockRestante(silo.kg_disponibles_reales || 0, 0);
         this.m_validarEgreso();
     },
 
+    m_actualizarVistaStockRestante: function(stockInicial, kilosDespachados) {
+        const info = document.getElementById('e_info_stock');
+        if (!info) return;
+
+        const restante = Math.max(0, stockInicial - kilosDespachados);
+        const color = restante > 0 ? '#1E6B4C' : '#E0342A';
+
+        info.innerHTML = `
+            <div>
+                <b>Stock Inicial Disponible:</b> ${Number(stockInicial).toLocaleString('es-AR')} KG
+            </div>
+            <div style="font-size:0.85rem;">
+                <b>Stock Físico Restante:</b> <strong style="color:${color}; font-size:0.95rem; font-family:monospace;">${restante.toLocaleString('es-AR')} KG</strong>
+            </div>
+        `;
+    },
+
     m_validarEgreso: function() {
-        const id = document.getElementById('e_silo_sel').value;
-        const cant = parseFloat(document.getElementById('e_kilos').value) || 0;
+        const id = document.getElementById('e_silo_sel')?.value;
+        const cant = parseFloat(document.getElementById('e_kilos')?.value) || 0;
         const silo = this.listaAcopioCalculado.find(s => String(s.registro_aco) === String(id));
         const btn = document.getElementById('btn-guardar-egreso-local');
-        const idEdicion = document.getElementById('e_id_edicion').value;
+        const idEdicion = document.getElementById('e_id_edicion')?.value;
+
+        if (silo) {
+            this.m_actualizarVistaStockRestante(silo.kg_disponibles_reales, cant);
+        }
 
         if (!btn) return;
 
@@ -849,10 +1089,10 @@ const ModuloEgresosProd = {
     },
 
     m_recalcularMontoPro: function() {
-        const kilos = parseFloat(document.getElementById('e_kilos').value) || 0;
-        const precio = parseFloat(document.getElementById('e_imp_uni_dolar').value) || 0;
-        const coti = parseFloat(document.getElementById('e_cotizacion').value) || 0;
-        const porcetajeIva = parseFloat(document.getElementById('e_iva').value) || 0;
+        const kilos = parseFloat(document.getElementById('e_kilos')?.value) || 0;
+        const precio = parseFloat(document.getElementById('e_imp_uni_dolar')?.value) || 0;
+        const coti = parseFloat(document.getElementById('e_cotizacion')?.value) || 0;
+        const porcetajeIva = parseFloat(document.getElementById('e_iva')?.value) || 0;
         
         const factorIva = 1 + (porcetajeIva / 100);
         const totalPesosConIva = kilos * precio * factorIva * coti;
@@ -864,20 +1104,41 @@ const ModuloEgresosProd = {
     },
 
     m_guardarTodo: async function() {
-        const idAco = document.getElementById('e_silo_sel').value;
-        const kilosSalida = parseFloat(document.getElementById('e_kilos').value) || 0;
-        const impUniDolar = parseFloat(document.getElementById('e_imp_uni_dolar').value) || 0;
-        const cotizacion = parseInt(document.getElementById('e_cotizacion').value) || 1200;
-        const porcetajeIva = parseFloat(document.getElementById('e_iva').value) || 0;
-        const idEdicion = document.getElementById('e_id_edicion').value;
-        const estadoEstablecido = document.getElementById('e_estado_valor').value;
-        const razonEmisora = document.getElementById('e_razon_emisora').value;
-        const remitoNumFinal = parseInt(document.getElementById('e_remito').value) || null;
+        const idAco = document.getElementById('e_silo_sel')?.value || '';
+        const kilosSalida = parseFloat(document.getElementById('e_kilos')?.value) || 0;
+        const cantRecepcionada = parseFloat(document.getElementById('e_cant_recepcionada')?.value) || kilosSalida;
+        const impUniDolar = parseFloat(document.getElementById('e_imp_uni_dolar')?.value) || 0;
+        const cotizacion = parseFloat(document.getElementById('e_cotizacion')?.value) || 1200;
+        const porcetajeIva = parseFloat(document.getElementById('e_iva')?.value) || 0;
+        const idEdicion = document.getElementById('e_id_edicion')?.value || '';
+        const estadoEstablecido = document.getElementById('e_estado_valor')?.value || 'Activo';
+        const tipoDespacho = document.getElementById('e_tipo_despacho')?.value || 'DECLARADO';
+        const razonEmisora = (document.getElementById('e_razon_emisora')?.value || 'PROPIO').trim().toUpperCase();
+        
+        let remitoNumFinal = (document.getElementById('e_remito')?.value || '').trim();
+        if (tipoDespacho === 'NO DECLARADO' && !remitoNumFinal) {
+            remitoNumFinal = await this.m_calcularSiguienteNoDeclarado();
+        }
+
+        const clienteTxt = (document.getElementById('e_cliente')?.value || '').trim().toUpperCase();
+        const choferTxt = (document.getElementById('e_chofer')?.value || '').trim().toUpperCase();
+        const pat1Txt = (document.getElementById('e_patente1')?.value || '').trim().toUpperCase();
+        const pat2Txt = (document.getElementById('e_patente2')?.value || '').trim().toUpperCase();
+        const fotoRemito = document.getElementById('e_foto_remito')?.value || '';
+        const fotoCarta = tipoDespacho === 'DECLARADO' ? (document.getElementById('e_foto_carta')?.value || '') : '';
         
         const silo = this.listaAcopioCalculado.find(s => String(s.registro_aco) === String(idAco));
-        if (!silo && !idEdicion) return (window.ComponentesUI ? window.ComponentesUI.notifica("⚠️ Seleccione una infraestructura válida.") : alert("⚠️ Seleccione infraestructura."));
+        if (!silo && !idEdicion) {
+            return (window.ComponentesUI ? window.ComponentesUI.notifica("⚠️ Seleccione una infraestructura válida.") : alert("⚠️ Seleccione infraestructura."));
+        }
 
-        if (!remitoNumFinal) return (window.ComponentesUI ? window.ComponentesUI.notifica("⚠️ Ingrese el número de remito.") : alert("Ingrese remito."));
+        if (!remitoNumFinal) {
+            return (window.ComponentesUI ? window.ComponentesUI.notifica("⚠️ Ingrese el número de remito.") : alert("Ingrese remito."));
+        }
+
+        if (kilosSalida <= 0) {
+            return (window.ComponentesUI ? window.ComponentesUI.notifica("⚠️ Ingrese una cantidad válida de kilos.") : alert("Cantidad de kilos inválida."));
+        }
 
         const btn = document.getElementById('btn-guardar-egreso-local');
         if (btn) {
@@ -893,31 +1154,27 @@ const ModuloEgresosProd = {
 
         const calculoTotalUsd = impUniDolar * kilosSalida * factorIva;
         const calculoTotalArs = calculoTotalUsd * cotizacion;
-        const razonOrigenPropietario = silo ? silo.establecimiento : document.getElementById('e_establecimiento').value;
-        const idDepositoFinal = parseInt(idAco) || (silo ? parseInt(silo.silo_n || silo.registro_aco) : null);
+        const razonOrigenPropietario = silo ? (silo.establecimiento || 'CENTRAL') : (document.getElementById('e_establecimiento')?.value || 'CENTRAL');
+        const idDepositoFinal = parseInt(idAco) || (silo ? parseInt(silo.registro_aco) : null);
 
         try {
             if (idEdicion) {
                 const sqlUpdate = `
                     UPDATE egresos_forraje SET
                         remito = ?, cliente = ?, chofer = ?, patente_1 = ?, patente_2 = ?,
-                        kilos = ?, imp_uni_dolar = ?, cotizacion = ?, iva = ?, imp_total_usd = ?,
-                        imp_total_ars = ?, razon_emisora = ?, estado = ?, sincronizado = 0
+                        kilos = ?, cant_recepcionada = ?, imp_uni_dolar = ?, cotizacion = ?, iva = ?, 
+                        imp_total_usd = ?, imp_total_ars = ?, foto_remito = ?, foto_carta = ?,
+                        razon_emisora = ?, despacho = ?, estado = ?, sincronizado = 0
                     WHERE id = ? OR registro = ?
                 `;
                 await this.m_ejecutarSqlLocal(sqlUpdate, [
-                    remitoNumFinal,
-                    (document.getElementById('e_cliente').value || '').trim(),
-                    (document.getElementById('e_chofer').value || '').trim(),
-                    (document.getElementById('e_patente1').value || '').trim(),
-                    (document.getElementById('e_patente2').value || '').trim(),
-                    kilosSalida, impUniDolar, cotizacion, porcetajeIva,
+                    remitoNumFinal, clienteTxt, choferTxt, pat1Txt, pat2Txt,
+                    kilosSalida, cantRecepcionada, impUniDolar, cotizacion, porcetajeIva,
                     parseFloat(calculoTotalUsd.toFixed(2)), parseFloat(calculoTotalArs.toFixed(0)),
-                    razonEmisora, estadoEstablecido,
+                    fotoRemito, fotoCarta, razonEmisora, tipoDespacho, estadoEstablecido,
                     parseInt(idEdicion), String(idEdicion)
                 ]);
             } else {
-                // Regla Max(id)+1
                 const resMax = await this.m_ejecutarSqlLocal(`SELECT MAX(CAST(id AS INTEGER)) as max_val FROM egresos_forraje`);
                 const maxVal = (resMax.data && resMax.data[0] && resMax.data[0].max_val) ? Number(resMax.data[0].max_val) : 0;
                 const nuevoIdEgreso = maxVal + 1;
@@ -925,40 +1182,34 @@ const ModuloEgresosProd = {
                 const sqlInsert = `
                     INSERT INTO egresos_forraje (
                         id, registro, remito, fecha, hora, cliente, chofer,
-                        patente_1, patente_2, kilos, deposito, campaña, periodo,
+                        patente_1, patente_2, kilos, cant_recepcionada, deposito, campaña, periodo,
                         razon_origen, razon_emisora, imp_uni_dolar, cotizacion, iva,
                         imp_total_usd, imp_total_ars, establecimiento, campo, cultivo,
-                        despacho, estado, sincronizado
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SI', 'PENDIENTE', 0)
+                        foto_remito, foto_carta, despacho, estado, sincronizado
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Activo', 0)
                 `;
 
                 await this.m_ejecutarSqlLocal(sqlInsert, [
-                    nuevoIdEgreso,
-                    String(nuevoIdEgreso),
-                    remitoNumFinal,
-                    hoy.toLocaleDateString('es-AR'),
-                    hoy.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
-                    (document.getElementById('e_cliente').value || '').trim(),
-                    (document.getElementById('e_chofer').value || '').trim(),
-                    (document.getElementById('e_patente1').value || '').trim(),
-                    (document.getElementById('e_patente2').value || '').trim(),
-                    kilosSalida,
-                    idDepositoFinal,
-                    silo ? silo.campaña : '',
-                    periodoFormateado,
-                    razonOrigenPropietario,
-                    razonEmisora,
-                    impUniDolar,
-                    cotizacion,
-                    porcetajeIva,
-                    parseFloat(calculoTotalUsd.toFixed(2)),
-                    parseFloat(calculoTotalArs.toFixed(0)),
-                    silo ? silo.establecimiento : '',
-                    silo ? silo.campo : '',
-                    silo ? silo.cultivo : ''
+                    nuevoIdEgreso, String(nuevoIdEgreso), remitoNumFinal,
+                    hoy.toLocaleDateString('es-AR'), hoy.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
+                    clienteTxt, choferTxt, pat1Txt, pat2Txt, kilosSalida, cantRecepcionada,
+                    idDepositoFinal, silo ? silo.campaña : '2025/2026', periodoFormateado,
+                    razonOrigenPropietario, razonEmisora, impUniDolar, cotizacion, porcetajeIva,
+                    parseFloat(calculoTotalUsd.toFixed(2)), parseFloat(calculoTotalArs.toFixed(0)),
+                    silo ? silo.establecimiento : '', silo ? silo.campo : '', silo ? silo.cultivo : '',
+                    fotoRemito, fotoCarta, tipoDespacho
                 ]);
 
-                // Asiento en movimientos_interempresas si emite otra razón social
+                if (silo) {
+                    const nuevoKgOrigen = Math.max(0, (Number(silo.kg_en_silo) || 0) - kilosSalida);
+                    const densidad = Number(silo.kg_mtr_silo) || 0;
+                    const nuevosMtrs = densidad > 0 ? parseFloat((nuevoKgOrigen / densidad).toFixed(2)) : 0;
+                    await this.m_ejecutarSqlLocal(
+                        `UPDATE acopio_produccion SET kg_en_silo = ?, mtrs_silo = ?, sincronizado = 0 WHERE registro_aco = ?`,
+                        [nuevoKgOrigen, nuevosMtrs, idAco]
+                    );
+                }
+
                 if (razonOrigenPropietario && razonEmisora && (razonOrigenPropietario.trim().toUpperCase() !== razonEmisora.trim().toUpperCase())) {
                     const sqlInsertPrestamo = `
                         INSERT INTO movimientos_interempresas (
@@ -967,24 +1218,28 @@ const ModuloEgresosProd = {
                         ) VALUES (?, ?, ?, ?, ?, ?, 'PRESTAMO_DESPACHO', ?, NULL, ?, ?, 0)
                     `;
                     await this.m_ejecutarSqlLocal(sqlInsertPrestamo, [
-                        hoy.toLocaleDateString('es-AR'),
-                        hoy.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
-                        razonOrigenPropietario,
-                        razonEmisora,
-                        silo.cultivo,
-                        kilosSalida,
-                        String(remitoNumFinal).trim(),
-                        `Despacho con Carta de Porte emitida por ${razonEmisora}`,
-                        idDepositoFinal
+                        hoy.toLocaleDateString('es-AR'), hoy.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
+                        razonOrigenPropietario, razonEmisora, silo ? silo.cultivo : '', kilosSalida,
+                        String(remitoNumFinal).trim(), `Despacho comercial emitido por ${razonEmisora}`, idDepositoFinal
                     ]);
                 }
             }
 
-            document.getElementById('modal-agrosoft').style.display = 'none';
+            const modal = document.getElementById('modal-agrosoft');
+            if (modal) modal.style.display = 'none';
+            
             await this.m_inicializar();
+
+            if (window.ComponentesUI && window.ComponentesUI.notifica) {
+                window.ComponentesUI.notifica("✅ Despacho guardado exitosamente.");
+            }
         } catch (err) {
             console.error("❌ Falla en la operación local de egreso:", err);
-            if(window.ComponentesUI) window.ComponentesUI.notifica("Error al guardar: " + err.message);
+            if (window.ComponentesUI && window.ComponentesUI.notifica) {
+                window.ComponentesUI.notifica("Error al guardar: " + err.message);
+            } else {
+                alert("Error al guardar: " + err.message);
+            }
         } finally {
             if (btn) {
                 btn.innerText = idEdicion ? "CONFIRMAR MODIFICACIÓN" : "CONFIRMAR DESPACHO";
@@ -1021,7 +1276,7 @@ const ModuloEgresosProd = {
                         <label style="font-size:0.65rem; color:#6B6255; font-weight:700; display:block; margin-bottom:4px; text-transform:uppercase;">Silo / Depósito Origen (${deudora} - Resta Stock)</label>
                         <select id="dev_silo_origen" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; background:#FFFFFF;">
                             <option value="">Seleccione silo de donde sale el grano...</option>
-                            ${silosDeudora.map(s => `<option value="${s.registro_aco}">${s.campo} - Silo/Dep: ${s.silo_n || s.deposito} (Disp: ${s.kg_disponibles_reales.toLocaleString('es-AR')} kg)</option>`).join('')}
+                            ${silosDeudora.map(s => `<option value="${s.registro_aco}">${s.campo} - Silo/Dep: ${s.silo_n || s.deposito} (Disp:${s.kg_disponibles_reales.toLocaleString('es-AR')} kg)</option>`).join('')}
                         </select>
                     </div>
 
@@ -1029,7 +1284,7 @@ const ModuloEgresosProd = {
                         <label style="font-size:0.65rem; color:#6B6255; font-weight:700; display:block; margin-bottom:4px; text-transform:uppercase;">Silo / Depósito Destino (${acreedora} - Suma Stock)</label>
                         <select id="dev_silo_destino" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid #E0DCD4; font-size:0.85rem; background:#FFFFFF;">
                             <option value="">Seleccione silo a donde ingresa la devolución...</option>
-                            ${silosAcreedora.map(s => `<option value="${s.registro_aco}">${s.campo} - Silo/Dep: ${s.silo_n || s.deposito} (Disp: ${s.kg_disponibles_reales.toLocaleString('es-AR')} kg)</option>`).join('')}
+                            ${silosAcreedora.map(s => `<option value="${s.registro_aco}">${s.campo} - Silo/Dep: ${s.silo_n || s.deposito} (Disp:${s.kg_disponibles_reales.toLocaleString('es-AR')} kg)</option>`).join('')}
                         </select>
                     </div>
 
@@ -1082,7 +1337,6 @@ const ModuloEgresosProd = {
 
             const hoy = new Date();
 
-            // 1. Restar stock en origen
             const nuevoStockOrigen = Math.max(0, (siloOrigen.kg_en_silo || 0) - kilos);
             const nuevosMtrsOrigen = siloOrigen.kg_mtr_silo > 0 ? parseFloat((nuevoStockOrigen / siloOrigen.kg_mtr_silo).toFixed(2)) : 0;
             await this.m_ejecutarSqlLocal(
@@ -1090,7 +1344,6 @@ const ModuloEgresosProd = {
                 [nuevoStockOrigen, nuevosMtrsOrigen, siloOrigen.registro_aco]
             );
 
-            // 2. Sumar stock en destino
             const nuevoStockDestino = (siloDestino.kg_en_silo || 0) + kilos;
             const nuevosMtrsDestino = siloDestino.kg_mtr_silo > 0 ? parseFloat((nuevoStockDestino / siloDestino.kg_mtr_silo).toFixed(2)) : 0;
             await this.m_ejecutarSqlLocal(
@@ -1098,7 +1351,6 @@ const ModuloEgresosProd = {
                 [nuevoStockDestino, nuevosMtrsDestino, siloDestino.registro_aco]
             );
 
-            // 3. Insertar asiento de DEVOLUCION
             const sqlInsertDevolucion = `
                 INSERT INTO movimientos_interempresas (
                     fecha, hora, empresa_acreedora, empresa_deudora, cultivo, kilos, 
@@ -1106,242 +1358,668 @@ const ModuloEgresosProd = {
                 ) VALUES (?, ?, ?, ?, ?, ?, 'DEVOLUCION', NULL, ?, ?, ?, 0)
             `;
             await this.m_ejecutarSqlLocal(sqlInsertDevolucion, [
-                hoy.toLocaleDateString('es-AR'),
-                hoy.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
-                acreedora, deudora, cultivo, kilos,
-                String(remitoRef).trim(),
-                comentario || `Devolución vinculada a Remito #${remitoRef}`,
-                parseInt(idSiloOrigen) || null
+                hoy.toLocaleDateString('es-AR'), hoy.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
+                acreedora, deudora, cultivo, kilos, String(remitoRef).trim(),
+                comentario || `Devolución vinculada a Remito #${remitoRef}`, parseInt(idSiloOrigen) || null
             ]);
 
             document.getElementById('modal-agrosoft').style.display = 'none';
             await this.m_inicializar();
         } catch (err) {
             console.error("❌ Error al registrar devolución:", err);
-            if (window.ComponentesUI) window.ComponentesUI.notifica("Error al procesar devolución: " + err.message);
+            if (window.ComponentesUI && window.ComponentesUI.notifica) {
+                window.ComponentesUI.notifica("Error al procesar devolución: " + err.message);
+            }
         }
     },
 
-    m_verDetalleRemito: function(id) {
+    m_solicitarBorrado: function(id, remito, kilos, depoId) {
         this.m_asegurarModalBase();
-        const e = this.datosEgresos.find(item => (item.id == id || item.registro == id));
-        if (!e) return;
-
         const modal = document.getElementById('modal-agrosoft');
         const container = document.getElementById('modal-formulario');
         const modalContent = document.querySelector('.modal-apple-content');
-        
-        if (modalContent) modalContent.style.maxWidth = '750px';
-        if (modal) modal.style.display = 'flex';
+        if (modalContent) modalContent.style.maxWidth = '420px';
 
-        document.getElementById('modal-titulo').innerText = `REMITO DE SALIDA #${e.remito}`;
-
-        const statusVoucher = (e.estado || 'PENDIENTE').toUpperCase();
-        const colorTxtStatus = statusVoucher === 'COBRADO' ? '#1FA958' : '#E08600';
+        document.getElementById('modal-titulo').innerText = "⚠️ REVERSIÓN DE BALANZA";
 
         container.innerHTML = `
-            <div style="background:#FFF; color:#1D1D1F; border-radius:12px; font-family:'Roboto', sans-serif;">
-                <div style="display:flex; justify-content:space-between; border-bottom:2px dashed #E0DCD4; padding-bottom:12px; margin-bottom:16px;">
-                    <div>
-                        <h3 style="margin:0; font-size:1.15rem; font-weight:800; color:#123F2C;">AGROSOFT J&L S.A.</h3>
-                        <span style="font-size:0.7rem; color:#6B6255; font-weight:700; text-transform:uppercase;">Control de Despachos de Balanza</span>
-                    </div>
-                    <div style="text-align:right;">
-                        <h4 style="margin:0; font-size:1.15rem; font-weight:800; color:#0071E3;">REMITO #${e.remito}</h4>
-                        <small style="color:#6B6255;">Fecha: ${e.fecha} &bull; Hora: ${e.hora || ''}</small>
-                    </div>
+            <div style="font-family:'Roboto', sans-serif; text-align:center; display:flex; flex-direction:column; gap:14px; padding:10px 5px;">
+                <div style="width:50px; height:50px; background:rgba(224,52,42,0.1); border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto; border:1px solid rgba(224,52,42,0.25);">
+                    <span style="color:#E0342A; font-size:1.5rem; font-weight:bold;">!</span>
                 </div>
-
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px; font-size:0.8rem;">
-                    <div style="background:#F8FAFC; padding:12px; border-radius:10px; border:1px solid #E0DCD4;">
-                        <strong>Propietario Cereal:</strong> ${e.razon_origen || e.establecimiento}<br>
-                        <strong>Razón Emisora C.P.:</strong> <span style="color:#0071E3; font-weight:bold;">${e.razon_emisora || e.establecimiento}</span><br>
-                        <strong>Depósito / Silo:</strong> Infraestructura N° ${e.deposito}<br>
-                        <strong>Campaña:</strong> ${e.campaña || '---'}
-                    </div>
-                    <div style="background:#F8FAFC; padding:12px; border-radius:10px; border:1px solid #E0DCD4;">
-                        <strong>Cliente Comprador:</strong> ${(e.cliente || '').toUpperCase()}<br>
-                        <strong>Chofer:</strong> ${e.chofer || '---'}<br>
-                        <strong>Patente Chasis:</strong> ${e.patente_1 || '---'} | <strong>Acoplado:</strong> ${e.patente_2 || '---'}<br>
-                        <strong>Estado Cobro:</strong> <strong style="color:${colorTxtStatus};">${statusVoucher}</strong>
-                    </div>
+                <div>
+                    <h3 style="margin:0; font-size:1.1rem; font-weight:bold; color:#1D1D1F;">¿Desea anular este despacho?</h3>
+                    <p style="margin:4px 0 0 0; font-size:0.8rem; color:#6E6E73; line-height:1.4;">
+                        Se revertirán los <b>${Number(kilos).toLocaleString('es-AR')} KG</b> del Remito #${remito} al saldo del acopio de origen.
+                    </p>
                 </div>
-
-                <table class="tabla-cuadros-plant" style="margin-bottom:16px;">
-                    <thead>
-                        <tr>
-                            <th>Descripción</th>
-                            <th style="text-align:right;">Precio Unit U$S</th>
-                            <th style="text-align:right;">IVA %</th>
-                            <th style="text-align:right;">Kilos Netos</th>
-                            <th style="text-align:right;">Total Liquidado ARS</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td><strong style="color:#123F2C;">🌱 FORRAJE BRUTO - CULTIVO: ${(e.cultivo || '').toUpperCase()}</strong></td>
-                            <td style="text-align:right; font-family:monospace;">U$S ${Number(e.imp_uni_dolar || 0).toFixed(3)}</td>
-                            <td style="text-align:right;">${e.iva || 0}%</td>
-                            <td style="text-align:right; font-weight:800; color:#E0342A; font-family:monospace;">-${Number(e.kilos).toLocaleString('es-AR')} kg</td>
-                            <td style="text-align:right; font-weight:800; color:#1FA958;">$ ${Number(e.imp_total_ars || 0).toLocaleString('es-AR')}</td>
-                        </tr>
-                    </tbody>
-                </table>
-
-                <div style="display:flex; justify-content:space-between; align-items:center; background:#F8FAFC; padding:12px 16px; border-radius:10px; border:1px solid #E0DCD4;">
-                    <div style="font-size:0.75rem; color:#6B6255;">
-                        <b>Cotización:</b> $ ${e.cotizacion || 1200} ARS &bull; <b>Monto USD:</b> U$S ${Number(e.imp_total_usd || 0).toLocaleString('es-AR', {minimumFractionDigits:2})}
-                    </div>
-                    <div style="text-align:right;">
-                        <span style="font-size:0.65rem; font-weight:700; color:#6B6255; text-transform:uppercase; display:block;">Total Facturado (C/IVA)</span>
-                        <strong style="font-size:1.3rem; color:#1E6B4C;">$ ${Number(e.imp_total_ars || 0).toLocaleString('es-AR')} ARS</strong>
-                    </div>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:8px; border-top:1px solid #E0DCD4; padding-top:14px;">
+                    <button onclick="document.getElementById('modal-agrosoft').style.display='none'" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:9px; border-radius:8px; font-weight:bold; font-size:0.78rem; cursor:pointer;">CANCELAR</button>
+                    <button id="btn-borrar-pegr-action" style="background:#E0342A; color:white; border:none; padding:9px; border-radius:8px; font-weight:bold; font-size:0.78rem; cursor:pointer;">CONFIRMAR BORRADO</button>
                 </div>
+            </div>
+        `;
 
-                <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px; border-top:1px solid #E0DCD4; padding-top:14px;">
-                    <button onclick="ModuloEgresosProd.m_exportarVoucherExcel(${e.id || e.registro})" style="background:#F0F2F5; color:#1D1D1F; border:1px solid #E0DCD4; padding:8px 14px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer;">
-                        📊 EXCEL COMPROBANTE
-                    </button>
-                    <button onclick="ModuloEgresosProd.m_imprimirVoucherPDF(${e.id || e.registro})" style="background:#1E6B4C; color:#FFF; border:none; padding:8px 16px; border-radius:8px; font-weight:700; font-size:0.75rem; cursor:pointer;">
-                        🖨️ IMPRIMIR VOUCHER (PDF)
-                    </button>
-                </div>
-            </div>`;
+        document.getElementById('btn-borrar-pegr-action').onclick = async () => {
+            try {
+                if (depoId) {
+                    const silo = this.datosAcopio.find(s => String(s.registro_aco) === String(depoId));
+                    if (silo) {
+                        const stockRestaurado = (Number(silo.kg_en_silo) || 0) + Number(kilos);
+                        const mtrs = Number(silo.kg_mtr_silo) > 0 ? parseFloat((stockRestaurado / Number(silo.kg_mtr_silo)).toFixed(2)) : 0;
+                        await this.m_ejecutarSqlLocal(
+                            `UPDATE acopio_produccion SET kg_en_silo = ?, mtrs_silo = ?, sincronizado = 0 WHERE registro_aco = ?`,
+                            [stockRestaurado, mtrs, silo.registro_aco]
+                        );
+                    }
+                }
+
+                await this.m_ejecutarSqlLocal(
+                    `DELETE FROM movimientos_interempresas WHERE remito_ref = ? OR remito_dev = ?`,
+                    [String(remito).trim(), String(remito).trim()]
+                );
+
+                await this.m_ejecutarSqlLocal(`DELETE FROM egresos_forraje WHERE id = ? OR registro = ?`, [id, String(id)]);
+
+                document.getElementById('modal-agrosoft').style.display = 'none';
+                await this.m_inicializar();
+
+                if (window.ComponentesUI && window.ComponentesUI.notifica) {
+                    window.ComponentesUI.notifica("🗑️ Despacho eliminado y stock restaurado.");
+                }
+            } catch (err) {
+                alert("Error al borrar: " + err.message);
+            }
+        };
+
+        if (modal) modal.style.display = 'flex';
     },
 
-    m_exportarVoucherExcel: function(id) {
+    m_verDetalleRemito: function(id) {
+        const e = this.datosEgresos.find(item => (item.id == id || item.registro == id));
+        if (!e) return;
+        this.m_imprimirRemitoOficialDesdeLista(id);
+    },
+
+    // IMPRESIÓN DIRECTA DEL REMITO INTERNO / VOUCHER DESDE LA LISTA
+    m_imprimirRemitoOficialDesdeLista: function(id) {
         const e = this.datosEgresos.find(item => (item.id == id || item.registro == id));
         if (!e) return;
 
-        const headers = ["CONCEPTO REMITO", "VALOR"];
-        const filas = [
-            ["NÚMERO REMITO", e.remito], ["FECHA", e.fecha], ["HORA", e.hora || ''],
-            ["CLIENTE", (e.cliente || '').toUpperCase()], ["CULTIVO DESPACHADO", (e.cultivo || '').toUpperCase()],
-            ["KILOS RETIRADOS", e.kilos], ["INFRAESTRUCTURA ORIGEN", e.deposito],
-            ["PROPIETARIO CEREAL", e.razon_origen || e.establecimiento],
-            ["EMPRESA EMISORA CARTA PORTE", e.razon_emisora || e.establecimiento],
-            ["PRECIO UNIT USD", e.imp_uni_dolar], ["COTIZACIÓN", e.cotizacion], ["IVA %", e.iva],
-            ["TOTAL USD CON IVA", e.imp_total_usd], ["TOTAL ARS CON IVA", e.imp_total_ars],
-            ["ESTADO COBRO", e.estado || 'PENDIENTE'], ["CHOFER", e.chofer],
-            ["PATENTE CHASIS", e.patente_1], ["PATENTE ACOPLADO", e.patente_2]
-        ];
+        const numRemito = e.remito || e.id || 'S/N';
+        const fechaDoc = e.fecha || new Date().toLocaleDateString('es-AR');
+        const horaDoc = e.hora || '';
+        const propietario = (e.razon_origen || e.establecimiento || 'CENTRAL').toUpperCase();
+        const emisora = (e.razon_emisora || propietario).toUpperCase();
+        const cliente = (e.cliente || 'CONSUMO PROPIO').toUpperCase();
+        const chofer = (e.chofer || 'LOGÍSTICA INTERNA').toUpperCase();
+        const patentes = `${e.patente_1 || '-'} ${e.patente_2 ? '/ ' + e.patente_2 : ''}`;
+        const cultivo = (e.cultivo || 'FORRAJE BRUTO').toUpperCase();
+        const kilos = Number(e.kilos || 0).toLocaleString('es-AR');
+        const precioUnit = Number(e.imp_uni_dolar || 0).toFixed(3);
+        const iva = Number(e.iva || 0);
+        const totalArs = Number(e.imp_total_ars || 0).toLocaleString('es-AR');
+        const totalUsd = Number(e.imp_total_usd || 0).toLocaleString('es-AR', { minimumFractionDigits: 2 });
+        const condicion = (e.despacho || 'DECLARADO').toUpperCase();
 
-        let csvContent = "\uFEFF" + headers.join(";") + "\n";
-        filas.forEach(f => { csvContent += f.join(";") + "\n"; });
-
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.setAttribute("download", `Salvucci_Remito_${e.remito}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    },
-
-    m_imprimirVoucherPDF: function(id) {
-        const e = this.datosEgresos.find(item => (item.id == id || item.registro == id));
-        if (!e) return;
-
-        const ventanaImpresion = window.open('', '_blank');
+        const ventanaImpresion = window.open('', '_blank', 'width=950,height=750');
         ventanaImpresion.document.write(`
-            <html>
+            <!DOCTYPE html>
+            <html lang="es">
             <head>
-                <title>Comprobante Remito #${e.remito}</title>
+                <meta charset="UTF-8">
+                <title>Remito de Salida #${numRemito}</title>
                 <style>
                     @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&display=swap');
-                    body { font-family: 'Roboto', sans-serif; padding: 40px; color: #211C16; background:#FFF; }
-                    .remito-box { border: 2px solid #E0DCD4; border-radius: 12px; padding: 25px; }
-                    table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 11px; }
-                    th { background: #F8FAFC; padding: 10px; font-weight: bold; border-bottom: 2px solid #E0DCD4; text-align: left;}
-                    td { padding: 10px; border-bottom: 1px solid #E0DCD4; }
+                    * { box-sizing: border-box; }
+                    body {
+                        font-family: 'Roboto', sans-serif;
+                        padding: 30px;
+                        color: #211C16;
+                        background: #F5F4F1;
+                        -webkit-print-color-adjust: exact;
+                        print-color-adjust: exact;
+                    }
+                    .documento-remito {
+                        max-width: 860px;
+                        margin: 0 auto;
+                        background: #FFFFFF;
+                        border: 1.5px solid #E0DCD4;
+                        border-radius: 14px;
+                        padding: 26px 30px;
+                        box-shadow: 0 4px 14px rgba(0,0,0,0.06);
+                    }
+                    .header-remito {
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                        border-bottom: 2.5px solid #1E6B4C;
+                        padding-bottom: 14px;
+                        margin-bottom: 16px;
+                    }
+                    .titulos-empresa h1 {
+                        margin: 0;
+                        font-size: 1.35rem;
+                        font-weight: 900;
+                        color: #123F2C;
+                        letter-spacing: -0.3px;
+                    }
+                    .titulos-empresa p {
+                        margin: 2px 0 0 0;
+                        font-size: 0.75rem;
+                        color: #6B6255;
+                        font-weight: 500;
+                    }
+                    .box-folio-remito {
+                        text-align: right;
+                    }
+                    .badge-documento {
+                        background: #1E6B4C;
+                        color: #FFFFFF;
+                        font-size: 0.68rem;
+                        font-weight: 800;
+                        padding: 3px 8px;
+                        border-radius: 6px;
+                        text-transform: uppercase;
+                        display: inline-block;
+                    }
+                    .numero-remito {
+                        margin: 4px 0 0 0;
+                        font-size: 1.35rem;
+                        font-weight: 900;
+                        color: #0071E3;
+                        font-family: monospace;
+                    }
+                    .sub-fecha {
+                        font-size: 0.72rem;
+                        color: #6B6255;
+                        font-weight: 600;
+                    }
+                    .grid-datos-principales {
+                        display: grid;
+                        grid-template-columns: 1fr 1fr;
+                        gap: 12px;
+                        margin-bottom: 16px;
+                    }
+                    .card-info-bloque {
+                        background: #F8FAFC;
+                        border: 1px solid #E0DCD4;
+                        border-radius: 10px;
+                        padding: 12px 14px;
+                        font-size: 0.78rem;
+                        line-height: 1.5;
+                    }
+                    .card-info-bloque strong {
+                        color: #123F2C;
+                    }
+                    .tabla-articulos {
+                        width: 100%;
+                        border-collapse: collapse;
+                        font-size: 0.8rem;
+                        margin-bottom: 14px;
+                    }
+                    .tabla-articulos th {
+                        background: #123F2C;
+                        color: #FFFFFF;
+                        font-size: 0.68rem;
+                        font-weight: 700;
+                        text-transform: uppercase;
+                        padding: 8px 10px;
+                        letter-spacing: 0.4px;
+                    }
+                    .tabla-articulos td {
+                        padding: 10px;
+                        border-bottom: 1px solid #E0DCD4;
+                        color: #211C16;
+                    }
+                    .box-totales-financieros {
+                        background: rgba(30, 107, 76, 0.06);
+                        border: 1.5px solid rgba(30, 107, 76, 0.25);
+                        border-radius: 10px;
+                        padding: 12px 16px;
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                        margin-bottom: 24px;
+                    }
+                    .firmas-grid {
+                        display: grid;
+                        grid-template-columns: 1fr 1fr;
+                        gap: 40px;
+                        margin-top: 35px;
+                        padding-top: 10px;
+                    }
+                    .linea-firma {
+                        border-top: 1.5px solid #1D1D1F;
+                        text-align: center;
+                        padding-top: 6px;
+                        font-size: 0.72rem;
+                        font-weight: bold;
+                        color: #1D1D1F;
+                        text-transform: uppercase;
+                    }
+                    .pie-aviso {
+                        text-align: center;
+                        margin-top: 18px;
+                        font-size: 0.65rem;
+                        color: #8E8E93;
+                        border-top: 1px dashed #E0DCD4;
+                        padding-top: 8px;
+                    }
+                    @media print {
+                        body { background: #FFFFFF; padding: 0; }
+                        .documento-remito { border: none; box-shadow: none; padding: 10px; max-width: 100%; }
+                    }
                 </style>
             </head>
             <body>
-                <div class="remito-box">
-                    <div style="display:flex; justify-content:space-between; border-bottom:2px dashed #E0DCD4; padding-bottom:15px; margin-bottom:20px;">
-                        <div>
-                            <h2 style="margin:0; font-size:1.3rem; font-weight:900; color:#123F2C;">SALVUCCI GESTIÓN</h2>
-                            <small style="color:#6B6255; font-weight:bold;">CONTROL DE DESPACHOS DE BALANZA</small>
+                <div class="documento-remito">
+                    <div class="header-remito">
+                        <div class="titulos-empresa">
+                            <h1>SALVUCCI GESTIÓN</h1>
+                            <p>Control Central de Báscula y Despachos de Producción</p>
                         </div>
-                        <div style="text-align:right;">
-                            <span style="background:#E0342A; color:#FFF; padding:2px 8px; border-radius:4px; font-size:10px; font-weight:bold;">DOCUMENTO INTERNO</span>
-                            <h3 style="margin:5px 0 0 0; color:#1E6B4C; font-size:1.4rem;">REMITO #${e.remito}</h3>
-                            <small>Fecha: ${e.fecha} &bull; Hora: ${e.hora || ''}</small>
-                        </div>
-                    </div>
-
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px; font-size:11px; margin-bottom:20px;">
-                        <div style="background:#F8FAFC; padding:12px; border-radius:8px; border:1px solid #E0DCD4;">
-                            <strong>PROPIETARIO CEREAL:</strong> ${e.razon_origen || e.establecimiento}<br>
-                            <strong>RAZÓN EMISORA C.P.:</strong> ${e.razon_emisora || e.establecimiento}<br>
-                            <strong>INFRAESTRUCTURA:</strong> Depósito/Silo N° ${e.deposito}<br>
-                            <strong>CAMPAÑA:</strong> ${e.campaña || '---'}
-                        </div>
-                        <div style="background:#F8FAFC; padding:12px; border-radius:8px; border:1px solid #E0DCD4;">
-                            <strong>CLIENTE COMPRADOR:</strong> ${(e.cliente || '').toUpperCase()}<br>
-                            <strong>CHOFER:</strong> ${e.chofer || '---'}<br>
-                            <strong>PATENTES:</strong> ${e.patente_1 || '---'} / ${e.patente_2 || '---'}<br>
-                            <strong>ESTADO:</strong> ${(e.estado || 'PENDIENTE').toUpperCase()}
+                        <div class="box-folio-remito">
+                            <span class="badge-documento">REMITO DE SALIDA</span>
+                            <div class="numero-remito">#${numRemito}</div>
+                            <div class="sub-fecha">Fecha: ${fechaDoc} &bull; ${horaDoc}</div>
                         </div>
                     </div>
 
-                    <table>
+                    <div class="grid-datos-principales">
+                        <div class="card-info-bloque">
+                            <div><strong>Propietario Cereal:</strong> ${propietario}</div>
+                            <div><strong>Razón Emisora C.P.:</strong> ${emisora}</div>
+                            <div><strong>Infraestructura Origen:</strong> Silo/Dep N° ${e.deposito || '-'}</div>
+                            <div><strong>Campaña:</strong> ${e.campaña || '2025/2026'}</div>
+                            <div><strong>Condición de Despacho:</strong> ${condicion}</div>
+                        </div>
+                        <div class="card-info-bloque">
+                            <div><strong>Cliente Comprador:</strong> ${cliente}</div>
+                            <div><strong>Chofer / Transportista:</strong> ${chofer}</div>
+                            <div><strong>Patentes Chasis / Acoplado:</strong> ${patentes}</div>
+                            <div><strong>Estado de Cobro:</strong> ${(e.estado || 'PENDIENTE').toUpperCase()}</div>
+                        </div>
+                    </div>
+
+                    <table class="tabla-articulos">
                         <thead>
                             <tr>
-                                <th>CONCEPTO</th>
-                                <th style="text-align:right;">PRECIO U$S</th>
-                                <th style="text-align:right;">IVA</th>
-                                <th style="text-align:right;">KILOS NETOS</th>
-                                <th style="text-align:right;">TOTAL LIQUIDADO ARS</th>
+                                <th>Concepto / Cultivo</th>
+                                <th style="text-align:right;">Precio Unit U$S</th>
+                                <th style="text-align:right;">IVA %</th>
+                                <th style="text-align:right;">Kilos Brutos</th>
+                                <th style="text-align:right;">Total Liquidado ARS</th>
                             </tr>
                         </thead>
                         <tbody>
                             <tr>
-                                <td><b>🌱 FORRAJE BRUTO - ${(e.cultivo || '').toUpperCase()}</b></td>
-                                <td style="text-align:right; font-family:monospace;">U$S ${Number(e.imp_uni_dolar || 0).toFixed(3)}</td>
-                                <td style="text-align:right;">${e.iva || 0}%</td>
-                                <td style="text-align:right; font-weight:bold; color:#E0342A;">-${Number(e.kilos).toLocaleString('es-AR')} kg</td>
-                                <td style="text-align:right; font-weight:900; font-size:12px;">$ ${Number(e.imp_total_ars || 0).toLocaleString('es-AR')}</td>
+                                <td><strong>🌱 FORRAJE BRUTO - ${cultivo}</strong></td>
+                                <td style="text-align:right; font-family:monospace;">U$S ${precioUnit}</td>
+                                <td style="text-align:right;">${iva}%</td>
+                                <td style="text-align:right; font-weight:800; color:#E0342A; font-family:monospace;">-${kilos} kg</td>
+                                <td style="text-align:right; font-weight:800; color:#1FA958; font-family:monospace;">$ ${totalArs}</td>
                             </tr>
                         </tbody>
                     </table>
 
-                    <div style="text-align:right; margin-top:20px; background:#F8FAFC; padding:15px; border-radius:8px; border:1px solid #E0DCD4;">
-                        <span style="font-size:11px; color:#6B6255;">VALORIZACIÓN TOTAL REMITO CON IVA</span>
-                        <h2 style="margin:5px 0 0 0; color:#1E6B4C; font-size:1.5rem; font-weight:900;">$ ${Number(e.imp_total_ars || 0).toLocaleString('es-AR')} ARS</h2>
+                    <div class="box-totales-financieros">
+                        <div style="font-size:0.75rem; color:#6B6255;">
+                            <b>Cotización Dólar:</b> $ ${e.cotizacion || 1200} ARS &bull; <b>Valor USD:</b> U$S ${totalUsd}
+                        </div>
+                        <div style="text-align:right;">
+                            <span style="font-size:0.65rem; font-weight:700; color:#6B6255; text-transform:uppercase; display:block;">Total Factura (C/IVA)</span>
+                            <strong style="font-size:1.3rem; color:#1E6B4C; font-family:monospace;">$ ${totalArs} ARS</strong>
+                        </div>
                     </div>
 
-                    <div style="margin-top:50px; border-top:1px solid #E0DCD4; padding-top:15px; display:flex; justify-content:space-between; font-size:10px; color:#6B6255;">
-                        <span>Salvucci Gestión &bull; Comprobantes de Despacho</span>
-                        <span style="font-weight:bold; color:#211C16;">Firma y Aclaración Transportista: ___________________________</span>
+                    <div class="firmas-grid">
+                        <div class="linea-firma">Firma Responsable Balanza</div>
+                        <div class="linea-firma">Firma Transportista / Recibió Conforme</div>
+                    </div>
+
+                    <div class="pie-aviso">
+                        Salvucci Gestión &bull; Sistema Local-First AgroSoft J&L
                     </div>
                 </div>
+
                 <script>
-                    window.onload = function() { window.print(); setTimeout(function() { window.close(); }, 500); }
+                    window.onload = function() {
+                        setTimeout(() => { window.print(); }, 250);
+                    };
                 </script>
             </body>
-            </html>`);
+            </html>
+        `);
         ventanaImpresion.document.close();
     },
 
-    m_exportarExcel: function() {
-        const datos = this.m_obtenerDatosFiltrados();
-        if (datos.length === 0) return alert("No hay registros cargados para exportar.");
+    m_exportarExcel: async function() {
+        const datos = (typeof this.m_obtenerDatosFiltrados === 'function') 
+            ? this.m_obtenerDatosFiltrados() 
+            : (this._m_obtenerStockFiltradoExport ? this._m_obtenerStockFiltradoExport() : this.datosEgresos);
 
+        if (!datos || datos.length === 0) {
+            return alert("No hay registros cargados para exportar.");
+        }
+
+        // 1. Detección universal de ExcelJS (Electron / Node / Web)
+        let ExcelJS = null;
+        if (typeof window !== 'undefined' && window.ExcelJS) {
+            ExcelJS = window.ExcelJS;
+        } else if (typeof require === 'function') {
+            try { ExcelJS = require('exceljs'); } catch (e) { ExcelJS = null; }
+        }
+
+        // Respaldo inmediato si la librería no está en el entorno
+        if (!ExcelJS) {
+            return this.m_exportarCsvFallback(datos);
+        }
+
+        const esElectron = typeof require === 'function' && typeof process !== 'undefined';
+        const folio = (typeof generarFolio === 'function') ? generarFolio('DESP') : `DESP-${Date.now().toString().slice(-6)}`;
+        const hoyStr = new Date().toISOString().split('T')[0];
+        const emitido = new Date().toLocaleString('es-AR');
+        const operario = (typeof operarioName !== 'undefined' ? operarioName : (window.operarioGlobal || 'ADMINISTRADOR')).toUpperCase();
+
+        const confTema = typeof SALVUCCI_CONF !== 'undefined' ? SALVUCCI_CONF : {
+            argbDark: 'FF104630',
+            argbTema: 'FF1E6B4C',
+            empresaRazon: 'SALVUCCI GESTIÓN · AGROSOFT J&L',
+            empresaDomicilio: 'Balanza Central y Control de Despachos',
+            pieInstitucional: 'Sistemas de Gestión Agrosoft J&L - Chimpay R.N. - Contacto: jsosa190585@gmail.com'
+        };
+
+        // 2. Definición formal de columnas para el libro contable
+        const columnas = [
+            { header: 'REG.', key: 'registro', width: 12, halign: 'center' },
+            { header: 'REMITO N°', key: 'remito', width: 14, halign: 'center' },
+            { header: 'FECHA', key: 'fecha', width: 13, halign: 'center' },
+            { header: 'HORA', key: 'hora', width: 10, halign: 'center' },
+            { header: 'CLIENTE / COMPRADOR', key: 'cliente', width: 26 },
+            { header: 'CHOFER TRANSPORTISTA', key: 'chofer', width: 22 },
+            { header: 'PATENTE', key: 'patente', width: 14, halign: 'center' },
+            { header: 'RAZÓN ORIGEN', key: 'origen', width: 22 },
+            { header: 'RAZÓN EMISORA', key: 'emisora', width: 20 },
+            { header: 'ESTABLECIMIENTO', key: 'establecimiento', width: 20 },
+            { header: 'CAMPO', key: 'campo', width: 18 },
+            { header: 'CULTIVO', key: 'cultivo', width: 16, halign: 'center' },
+            { header: 'KILOS DESPACHO', key: 'kilos', width: 18, halign: 'right', numero: true, destacada: true },
+            { header: 'KILOS RECEPCIÓN', key: 'cant_rec', width: 18, halign: 'right', numero: true },
+            { header: 'DIFERENCIA BÁSCULA', key: 'dif_kilos', width: 18, halign: 'right', numero: true },
+            { header: 'DEPÓSITO / SILO', key: 'deposito', width: 16, halign: 'center' },
+            { header: 'CAMPAÑA', key: 'campana', width: 14, halign: 'center' },
+            { header: 'PRECIO UNIT. (U$S)', key: 'imp_uni', width: 18, halign: 'right', numero: true },
+            { header: 'TOTAL (U$S)', key: 'total_usd', width: 18, halign: 'right', numero: true, destacada: true },
+            { header: 'TOTAL ($ ARS)', key: 'total_ars', width: 20, halign: 'right', numero: true, destacada: true },
+            { header: 'ESTADO COBRO', key: 'estado', width: 15, halign: 'center' },
+            { header: 'CONDICIÓN', key: 'despacho', width: 15, halign: 'center' }
+        ];
+
+        // Mapeo seguro y cálculo de mermas
+        const filasProcesadas = datos.map(e => {
+            const kgDesp = Number(e.kilos || 0);
+            const kgRec = Number(e.cant_recepcionada !== null && e.cant_recepcionada !== undefined ? e.cant_recepcionada : e.kilos) || 0;
+            const dif = kgRec - kgDesp;
+
+            return {
+                registro: String(e.registro || e.id || ''),
+                remito: e.remito ? `#${e.remito}` : '-',
+                fecha: e.fecha || '-',
+                hora: e.hora || '-',
+                cliente: (e.cliente || 'S/D').toUpperCase(),
+                chofer: (e.chofer || 'S/D').toUpperCase(),
+                patente: `${e.patente_1 || ''} ${e.patente_2 || ''}`.trim() || '-',
+                origen: (e.razon_origen || '').toUpperCase(),
+                emisora: (e.razon_emisora || '').toUpperCase(),
+                establecimiento: (e.establecimiento || '').toUpperCase(),
+                campo: (e.campo || '').toUpperCase(),
+                cultivo: (e.cultivo || '').toUpperCase(),
+                kilos: kgDesp,
+                cant_rec: kgRec,
+                dif_kilos: dif,
+                deposito: e.deposito ? `Silo #${e.deposito}` : '-',
+                campana: e.campaña || '-',
+                imp_uni: Number(e.imp_uni_dolar || 0),
+                total_usd: Number(e.imp_total_usd || 0),
+                total_ars: Number(e.imp_total_ars || 0),
+                estado: (e.estado || 'PENDIENTE').toUpperCase(),
+                despacho: (e.despacho || 'DECLARADO').toUpperCase()
+            };
+        });
+
+        try {
+            const wb = new ExcelJS.Workbook();
+            wb.creator = 'Salvucci Gestión · AgroSoft J&L';
+            wb.created = new Date();
+
+            // -------------------------------------------------------------
+            // HOJA 1: REGISTRO DE DESPACHOS
+            // -------------------------------------------------------------
+            const ws = wb.addWorksheet('Despachos y Ventas', {
+                views: [{ state: 'frozen', ySplit: 5 }],
+                pageSetup: {
+                    orientation: 'landscape',
+                    fitToPage: true,
+                    fitToWidth: 1,
+                    fitToHeight: 0,
+                    paperSize: 9,
+                    margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.6, header: 0.2, footer: 0.3 }
+                }
+            });
+
+            ws.columns = columnas.map(c => ({ header: c.header, key: c.key, width: c.width }));
+            filasProcesadas.forEach(f => ws.addRow(f));
+
+            // Membrete Institucional (4 filas superiores)
+            ws.spliceRows(1, 0, [], [], [], []);
+            const nCols = columnas.length;
+
+            ws.getRow(1).height = 34;
+            ws.getRow(2).height = 16;
+            ws.getRow(3).height = 15;
+            ws.getRow(4).height = 15;
+
+            for (let r = 1; r <= 4; r++) ws.mergeCells(r, 2, r, nCols);
+
+            const cTitulo = ws.getCell(1, 2);
+            cTitulo.value = 'SALVUCCI GESTIÓN — REGISTRO INTEGRAL DE DESPACHOS Y BÁSCULA';
+            cTitulo.font = { bold: true, size: 14, color: { argb: confTema.argbDark } };
+            cTitulo.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            const cSub = ws.getCell(2, 2);
+            cSub.value = 'Auditoría comercial de granos, doble pesaje de báscula, cartas de porte y facturación';
+            cSub.font = { italic: true, size: 9.5, color: { argb: 'FF556358' } };
+            cSub.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            const cEmpresa = ws.getCell(3, 2);
+            cEmpresa.value = `${confTema.empresaRazon} — ${confTema.empresaDomicilio}`;
+            cEmpresa.font = { size: 8.5, color: { argb: 'FF556358' } };
+            cEmpresa.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            const cMeta = ws.getCell(4, 2);
+            cMeta.value = `Folio: ${folio}   ·   Emitido: ${emitido}   ·   Operario: ${operario}   ·   Despachos: ${filasProcesadas.length}`;
+            cMeta.font = { bold: true, size: 8.5, color: { argb: confTema.argbTema } };
+            cMeta.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            // Inserción de Logo institucional
+            if (typeof cargarLogoBase64 === 'function') {
+                const logoBase64 = cargarLogoBase64();
+                if (logoBase64) {
+                    try {
+                        const idLogo = wb.addImage({ base64: 'data:image/png;base64,' + logoBase64, extension: 'png' });
+                        ws.addImage(idLogo, { tl: { col: 0.1, row: 0.1 }, ext: { width: 70, height: 70 }, editAs: 'oneCell' });
+                    } catch (e) { console.warn('Logo no incrustado:', e.message); }
+                }
+            }
+
+            // Inserción de Código de Barras Code 128
+            if (typeof codigoBarrasPngBase64 === 'function') {
+                const cbBase64 = codigoBarrasPngBase64(folio, 420, 62);
+                if (cbBase64) {
+                    try {
+                        const idCb = wb.addImage({ base64: cbBase64, extension: 'png' });
+                        ws.addImage(idCb, { tl: { col: Math.max(nCols - 4, 2), row: 0.12 }, ext: { width: 220, height: 44 }, editAs: 'oneCell' });
+                    } catch (e) { console.warn('Código de barras no incrustado:', e.message); }
+                }
+            }
+
+            // Encabezado de la tabla (Fila 5)
+            const filaHead = ws.getRow(5);
+            filaHead.height = 24;
+            filaHead.eachCell({ includeEmpty: true }, cell => {
+                cell.font = { bold: true, size: 9.2, color: { argb: 'FFFFFFFF' } };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: confTema.argbTema } };
+                cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+                cell.border = { bottom: { style: 'thin', color: { argb: confTema.argbDark } } };
+            });
+
+            const primeraFila = 6;
+            const ultimaFila = primeraFila + filasProcesadas.length - 1;
+
+            // Formatos y celdas individuales
+            for (let r = primeraFila; r <= ultimaFila; r++) {
+                const fila = ws.getRow(r);
+                columnas.forEach((c, i) => {
+                    const cell = fila.getCell(i + 1);
+                    cell.alignment = { vertical: 'middle', horizontal: c.halign || 'left' };
+                    cell.font = { size: 9, bold: !!c.destacada };
+                    cell.border = {
+                        top: { style: 'hair', color: { argb: 'FFD2D7D3' } },
+                        bottom: { style: 'hair', color: { argb: 'FFD2D7D3' } }
+                    };
+
+                    if (c.numero) {
+                        if (c.key === 'imp_uni') cell.numFmt = '"U$S" #,##0.000';
+                        else if (c.key === 'total_usd') cell.numFmt = '"U$S" #,##0.00';
+                        else if (c.key === 'total_ars') cell.numFmt = '"$" #,##0.00';
+                        else cell.numFmt = '#,##0';
+                    }
+
+                    if (c.key === 'kilos') cell.font = { size: 9, bold: true, color: { argb: 'FFC62828' } };
+                    if (c.key === 'cant_rec') cell.font = { size: 9, bold: true, color: { argb: 'FF2E7D32' } };
+                    if (c.key === 'dif_kilos') {
+                        const v = Number(cell.value || 0);
+                        cell.font = { size: 8.5, bold: true, color: { argb: v < 0 ? 'FFC62828' : (v > 0 ? 'FF2E7D32' : 'FF556358') } };
+                    }
+                    if (c.key === 'total_usd') cell.font = { size: 9, bold: true, color: { argb: confTema.argbDark } };
+                    if (c.key === 'total_ars') cell.font = { size: 9, bold: true, color: { argb: 'FF0277BD' } };
+                });
+
+                if ((r - primeraFila) % 2 === 1) {
+                    fila.eachCell({ includeEmpty: true }, cell => {
+                        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9FBF9' } };
+                    });
+                }
+            }
+
+            // Fila de Totales con fórmula nativa SUM()
+            if (filasProcesadas.length > 0) {
+                const filaTot = ws.getRow(ultimaFila + 2);
+                filaTot.height = 22;
+                columnas.forEach((c, i) => {
+                    const cell = filaTot.getCell(i + 1);
+                    if (i === 0) cell.value = 'TOTALES GENERALES →';
+                    else if (c.numero && c.key !== 'imp_uni') {
+                        const colLetra = cell.address.replace(/\d+$/, '');
+                        cell.value = { formula: `SUM(${colLetra}${primeraFila}:${colLetra}${ultimaFila})` };
+                        if (c.key === 'total_usd') cell.numFmt = '"U$S" #,##0.00';
+                        else if (c.key === 'total_ars') cell.numFmt = '"$" #,##0.00';
+                        else cell.numFmt = '#,##0';
+                    }
+                    cell.font = { bold: true, size: 9.5, color: { argb: 'FFFFFFFF' } };
+                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: confTema.argbDark } };
+                    cell.alignment = { vertical: 'middle', horizontal: c.halign || 'left' };
+                });
+            }
+
+            ws.autoFilter = { from: { row: 5, column: 1 }, to: { row: Math.max(ultimaFila, 5), column: nCols } };
+            const pieXls = `&L&"Arial,Bold"&8${confTema.pieInstitucional}&R&8Folio ${folio} · Página &P de &N`;
+            ws.headerFooter = { oddFooter: pieXls, evenFooter: pieXls };
+            ws.pageSetup.printTitlesRow = '5:5';
+
+            // -------------------------------------------------------------
+            // HOJA 2: RESUMEN EJECUTIVO Y AUDITORÍA DE BÁSCULA
+            // -------------------------------------------------------------
+            const wsRes = wb.addWorksheet('Resumen de Auditoría');
+            wsRes.columns = [
+                { header: 'INDICADOR DE GESTIÓN', key: 'label', width: 36 },
+                { header: 'VALOR AUDITADO', key: 'valor', width: 24 }
+            ];
+
+            wsRes.getRow(1).height = 22;
+            wsRes.getRow(1).eachCell(cell => {
+                cell.font = { bold: true, size: 9.5, color: { argb: 'FFFFFFFF' } };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: confTema.argbTema } };
+                cell.alignment = { vertical: 'middle', horizontal: 'center' };
+            });
+
+            const totKilosSalida = filasProcesadas.reduce((a, b) => a + b.kilos, 0);
+            const totKilosRecep = filasProcesadas.reduce((a, b) => a + b.cant_rec, 0);
+            const totDolar = filasProcesadas.reduce((a, b) => a + b.total_usd, 0);
+            const totPesos = filasProcesadas.reduce((a, b) => a + b.total_ars, 0);
+            const mermaTotal = totKilosRecep - totKilosSalida;
+            const pctEntrega = totKilosSalida > 0 ? ((totKilosRecep / totKilosSalida) * 100).toFixed(2) + '%' : '100%';
+
+            const resumenKpis = [
+                { label: 'Total Despachos Efectuados', valor: String(filasProcesadas.length) },
+                { label: 'Kilos Totales Despachados (Campo)', valor: `${totKilosSalida.toLocaleString('es-AR')} KG` },
+                { label: 'Kilos Totales Recepcionados (Destino)', valor: `${totKilosRecep.toLocaleString('es-AR')} KG` },
+                { label: 'Diferencia / Merma de Transporte', valor: `${mermaTotal.toLocaleString('es-AR')} KG` },
+                { label: 'Índice de Entrega Efectiva', valor: pctEntrega },
+                { label: 'Facturación Global (U$S)', valor: `U$S ${totDolar.toLocaleString('es-AR', { minimumFractionDigits: 2 })}` },
+                { label: 'Facturación Global ($ ARS)', valor: `$ ${totPesos.toLocaleString('es-AR', { minimumFractionDigits: 2 })}` },
+                { label: 'Folio de Auditoría', valor: folio },
+                { label: 'Fecha y Hora de Emisión', valor: emitido },
+                { label: 'Operador Responsable', valor: operario },
+                { label: 'Sistema', valor: 'Salvucci Gestión · AgroSoft J&L' }
+            ];
+
+            resumenKpis.forEach(r => wsRes.addRow(r));
+            wsRes.headerFooter = { oddFooter: pieXls, evenFooter: pieXls };
+
+            // 3. Generación y descarga transparente (Electron o Navegador)
+            const nombreArchivo = `Salvucci_Despachos_Balanza_${hoyStr}.xlsx`;
+            const buffer = await wb.xlsx.writeBuffer();
+
+            if (esElectron && typeof guardarEnDescargas === 'function') {
+                guardarEnDescargas(nombreArchivo, Buffer.from(buffer));
+                if (typeof lanzarToast === 'function') lanzarToast(`Excel guardado en Descargas: ${nombreArchivo}`);
+                else if (window.ComponentesUI?.notificar) window.ComponentesUI.notificar('exito', `Excel guardado: ${nombreArchivo}`);
+                else alert(`Excel generado con éxito en Descargas:\n${nombreArchivo}`);
+            } else if (typeof descargarNativoBlob === 'function') {
+                const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                descargarNativoBlob(blob, nombreArchivo);
+            } else {
+                const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.setAttribute("download", nombreArchivo);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
+
+        } catch (err) {
+            console.error("❌ Error generando Excel profesional:", err);
+            this.m_exportarCsvFallback(datos);
+        }
+    },
+
+    m_exportarCsvFallback: function(datos) {
         const headers = [
             "REGISTRO", "REMITO", "FECHA", "HORA", "CLIENTE", "CHOFER", 
             "PATENTE 1", "PATENTE 2", "PROPIETARIO", "EMPRESA EMISORA", "ESTABLECIMIENTO", "CAMPO", 
-            "CULTIVO", "KILOS BRUTOS", "DEPOSITO N°", "CAMPAÑA", "TOTAL USD", "TOTAL ARS", "ESTADO COBRO"
+            "CULTIVO", "KILOS BRUTOS", "RECEPCIÓN DESTINO", "DEPOSITO N°", "CAMPAÑA", "TOTAL USD", "TOTAL ARS", "ESTADO COBRO", "CONDICION"
         ];
         
         let csvContent = "\uFEFF" + headers.join(";") + "\n";
-
         datos.forEach(e => {
             const fila = [
                 e.registro || e.id, e.remito, e.fecha, `"${e.hora || ''}"`, `"${e.cliente || 'S/D'}"`, `"${e.chofer || 'S/D'}"`,
                 `"${e.patente_1 || ''}"`, `"${e.patente_2 || ''}"`, `"${e.razon_origen || ''}"`, `"${e.razon_emisora || ''}"`, `"${e.establecimiento || ''}"`,
-                `"${e.campo || ''}"`, `"${e.cultivo || ''}"`, e.kilos, e.deposito, `"${e.campaña || ''}"`,
-                e.imp_total_usd || 0, e.imp_total_ars || 0, `"${e.estado || 'PENDIENTE'}"`
+                `"${e.campo || ''}"`, `"${e.cultivo || ''}"`, e.kilos, e.cant_recepcionada || e.kilos, e.deposito, `"${e.campaña || ''}"`,
+                e.imp_total_usd || 0, e.imp_total_ars || 0, `"${e.estado || 'PENDIENTE'}"`, `"${e.despacho || 'DECLARADO'}"`
             ];
             csvContent += fila.join(";") + "\n";
         });
@@ -1422,8 +2100,7 @@ const ModuloEgresosProd = {
                                 <td>${e.establecimiento} <br><small style="color:#0071E3;">(Emite: ${e.razon_emisora || e.establecimiento})</small></td>
                                 <td><strong style="color:#123F2C;">🌱 ${(e.cultivo || '').toUpperCase()}</strong></td>
                                 <td style="text-align:right; font-weight:800; color:#E0342A;">-${Number(e.kilos).toLocaleString('es-AR')} kg</td>
-                                <td><b style="color: ${e.estado === 'COBRADO' ? '#1FA958' : '#E08600'}">${(e.estado || 'PENDIENTE').toUpperCase()}</b></td>
-                                <td style="text-align:right; font-weight:800;">$ ${Number(e.imp_total_ars || 0).toLocaleString('es-AR')}</td>
+                                <td><b style="color: ${e.estado === 'COBRADO' ? '#1FA958' : '#E08600'}">${(e.estado || 'PENDIENTE').toUpperCase()}</b></td>                                 <td style="text-align:right; font-weight:800;">$ ${Number(e.imp_total_ars || 0).toLocaleString('es-AR')}</td>
                             </tr>
                         `).join('')}
                     </tbody>

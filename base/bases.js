@@ -50,18 +50,19 @@ function inicializarTablasLocales() {
 
         // USUARIOS Y SESIÓN
         db.prepare(`
-            CREATE TABLE IF NOT EXISTS usuarios (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                usuario TEXT UNIQUE NOT NULL,
-                clave TEXT NOT NULL,
-                nombre TEXT,
-                correo TEXT,
-                rol TEXT DEFAULT 'OPERADOR',
-                ultimo_acceso TEXT,
-                sincronizado INTEGER DEFAULT 0
-            )
-        `).run();
-
+    CREATE TABLE IF NOT EXISTS usuarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        operario TEXT,
+        device TEXT,
+        correo TEXT UNIQUE,
+        pass TEXT NOT NULL,
+        menu TEXT,
+        licencia TEXT,
+        contacto TEXT,
+        ultimo_acceso TEXT,
+        sincronizado INTEGER DEFAULT 0
+    )
+`).run();
         db.prepare(`
             CREATE TABLE IF NOT EXISTS sesion_activa (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -90,6 +91,10 @@ function inicializarTablasLocales() {
                 campaña TEXT,
                 deposito TEXT,
                 ubicacion TEXT,
+                remito TEXT,
+                chofer TEXT,
+                fecha_mov TEXT,
+                origen_traslado TEXT,
                 sincronizado INTEGER DEFAULT 0
             )
         `).run();
@@ -107,6 +112,24 @@ function inicializarTablasLocales() {
                 ubicacion TEXT,
                 reg_local TEXT,
                 lote TEXT,
+                sincronizado INTEGER DEFAULT 0
+            )
+        `).run();
+
+        // 2b. ESTABLECIMIENTOS -> PK (reg_local)  [nivel superior de la jerarquía territorial]
+        db.prepare(`
+            CREATE TABLE IF NOT EXISTS establecimientos (
+                id INTEGER,
+                reg_local TEXT PRIMARY KEY,
+                establecimiento TEXT NOT NULL,
+                razon_social TEXT,
+                cuit TEXT,
+                localidad TEXT,
+                provincia TEXT,
+                domicilio TEXT,
+                responsable TEXT,
+                telefono TEXT,
+                observaciones TEXT,
                 sincronizado INTEGER DEFAULT 0
             )
         `).run();
@@ -227,6 +250,7 @@ function inicializarTablasLocales() {
                 despacho TEXT,
                 hora TEXT,
                 foto_remito TEXT,
+                foto_carta TEXT,
                 imp_uni_dolar NUMERIC,
                 cotizacion INTEGER,
                 iva NUMERIC,
@@ -234,6 +258,7 @@ function inicializarTablasLocales() {
                 imp_total_ars NUMERIC,
                 estado TEXT,
                 razon_emisora TEXT,
+                cant_recepcionada REAL,
                 sincronizado INTEGER DEFAULT 0
             )
         `).run();
@@ -420,6 +445,67 @@ function inicializarTablasLocales() {
         db.prepare(`CREATE INDEX IF NOT EXISTS idx_plant_lote ON inventario_plantacion(lote)`).run();
         db.prepare(`CREATE INDEX IF NOT EXISTS idx_del_pend ON eliminaciones_pendientes(tabla, sincronizado)`).run();
 
+
+        // Índices de la jerarquía territorial
+        db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_est_nombre ON establecimientos(establecimiento COLLATE NOCASE)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_campos_est_campo ON campos(establecimiento, campo)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_cuadros_est_campo ON cuadros(establecimiento, campo, lote)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_plant_est_campo ON inventario_plantacion(establecimiento, campo)`).run();
+
+        // Migración única: crea la ficha de cada establecimiento que ya existe en campos / cuadros / siembras
+        const existentes = new Set(
+            db.prepare(`SELECT UPPER(TRIM(establecimiento)) AS n FROM establecimientos`).all().map(r => r.n)
+        );
+        const encontrados = db.prepare(`
+            SELECT TRIM(establecimiento) AS nombre FROM campos WHERE TRIM(IFNULL(establecimiento,'')) <> ''
+            UNION SELECT TRIM(establecimiento) FROM cuadros WHERE TRIM(IFNULL(establecimiento,'')) <> ''
+            UNION SELECT TRIM(establecimiento) FROM inventario_plantacion WHERE TRIM(IFNULL(establecimiento,'')) <> ''
+        `).all();
+        let maxEst = db.prepare(`SELECT IFNULL(MAX(CAST(reg_local AS INTEGER)), 0) AS m FROM establecimientos`).get().m;
+        const insEst = db.prepare(`INSERT INTO establecimientos (id, reg_local, establecimiento, sincronizado) VALUES (?, ?, ?, 0)`);
+        encontrados.forEach(({ nombre }) => {
+            if (existentes.has(nombre.toUpperCase())) return;
+            maxEst += 1;
+            insEst.run(maxEst, String(maxEst), nombre);
+            existentes.add(nombre.toUpperCase());
+        });
+
+        // Reparación: el selector de depósito de insumos guardaba "GALPÓN\u000Bert{}LOCALIDAD"
+        // (char(11) + "ert{}"). Se separa en campo_depo / localidad y se marca para re-sincronizar.
+        db.prepare(`
+            UPDATE insumos_ingresos
+            SET localidad = CASE WHEN IFNULL(localidad, '') = ''
+                                 THEN substr(campo_depo, instr(campo_depo, char(11)) + 6)
+                                 ELSE localidad END,
+                campo_depo = substr(campo_depo, 1, instr(campo_depo, char(11)) - 1),
+                sincronizado = 0
+            WHERE instr(campo_depo, char(11)) > 0
+        `).run();
+// ACA ES LO NUEVO: Creación de índices de alto rendimiento para cientos de miles de filas
+db.exec(`
+    -- 1. Acelera: SELECT * FROM insumos ORDER BY articulo ASC y búsquedas de nombres
+    CREATE INDEX IF NOT EXISTS idx_insumos_articulo 
+    ON insumos (articulo COLLATE NOCASE);
+
+    -- 2. Acelera la sincronización local: SELECT * FROM insumos WHERE sincronizado = 0
+    -- (Índice parcial: no gasta memoria indexando los que ya valen 1)
+    CREATE INDEX IF NOT EXISTS idx_insumos_pendientes_sync 
+    ON insumos (sincronizado) 
+    WHERE sincronizado = 0;
+
+    -- 3. Acelera selectores anidados o filtros por rubro/subrubro
+    CREATE INDEX IF NOT EXISTS idx_insumos_rubros 
+    ON insumos (rubro, sub_rubro);
+
+    -- 4. Acelera filtros por labores operativas
+    CREATE INDEX IF NOT EXISTS idx_insumos_labor 
+    ON insumos (text_labor);
+
+    -- 5. Ingresos por código de artículo (cod_articulo = insumos.reg_local):
+    --    al editar una ficha se actualizan sus ingresos sin recorrer toda la tabla
+    CREATE INDEX IF NOT EXISTS idx_ing_cod_articulo
+    ON insumos_ingresos (cod_articulo);
+`);
         // =====================================================================
         // TRIGGERS UNIVERSALES AFTER DELETE (CAPTURA AUTOMÁTICA EN COLA)
         // =====================================================================
@@ -441,6 +527,16 @@ function inicializarTablasLocales() {
             BEGIN
                 INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
                 VALUES ('campos', OLD.reg_local, OLD.id, CAST(OLD.id AS TEXT), datetime('now'), 0);
+            END;
+        `).run();
+
+        // 2b. Establecimientos
+        db.prepare(`
+            CREATE TRIGGER IF NOT EXISTS trg_del_establecimientos
+            AFTER DELETE ON establecimientos
+            BEGIN
+                INSERT INTO eliminaciones_pendientes (tabla, reg_local, id_remoto, clave_primaria_valor, fecha_borrado, sincronizado)
+                VALUES ('establecimientos', OLD.reg_local, OLD.id, OLD.reg_local, datetime('now'), 0);
             END;
         `).run();
 

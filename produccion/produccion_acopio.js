@@ -1,15 +1,4 @@
-﻿/**
- * acopio.js - Módulo de Control de Acopio, Silos y Depósitos
- * Sistema: Salvucci Gestión · AgroSoft J&L
- * Mode: "No me quites nada" + Regla Max(registro)+1 + Dynamic SQLite IPC + Sync Flag (sincronizado=0)
- * Integración: Mapa Satelital Earth con geolocalización rápida, ruedita libre y traslados con ajuste matemático exacto.
- */
-
-/**
- * acopio.js - Módulo de Control de Acopio, Silos y Depósitos
- * Sistema: Salvucci Gestión · AgroSoft J&L
- * Mode: "No me quites nada" + Regla Max(registro)+1 + Dynamic SQLite IPC + Sync Flag (sincronizado=0)
- */
+﻿
 
 const ModuloAcopio = {
     datosSilos: [],
@@ -1512,10 +1501,219 @@ const ModuloAcopio = {
         }
     },
 
-    m_exportarExcel: function() {
-        const datos = this.m_obtenerDatosFiltrados();
-        if (datos.length === 0) return alert("No hay registros cargados para exportar.");
+    m_exportarExcel: async function() {
+        const datos = this.m_obtenerDatosFiltrados() || [];
+        if (datos.length === 0) {
+            return this.m_notificarApple ? this.m_notificarApple("No hay registros de acopio para exportar.", "error") : alert("No hay registros de acopio.");
+        }
 
+        // 1. Detección universal de ExcelJS
+        let ExcelJS = null;
+        if (typeof window !== 'undefined' && window.ExcelJS) {
+            ExcelJS = window.ExcelJS;
+        } else if (typeof require === 'function') {
+            try { ExcelJS = require('exceljs'); } catch (e) { ExcelJS = null; }
+        }
+
+        // Fallback a CSV si la librería no está cargada
+        if (!ExcelJS) {
+            return this.m_exportarCsvFallbackAcopio(datos);
+        }
+
+        const esElectron = typeof require === 'function' && typeof process !== 'undefined';
+        const folio = generarFolio('ACP');
+        const hoyStr = new Date().toISOString().split('T')[0];
+        const operario = (typeof operarioName !== 'undefined' ? operarioName : (window.operarioGlobal || 'ADMINISTRADOR')).toUpperCase();
+
+        const columnas = [
+            { header: 'INFRAESTRUCTURA', key: 'infra', width: 20 },
+            { header: 'ESTABLECIMIENTO', key: 'establecimiento', width: 22 },
+            { header: 'CAMPO / LOTE', key: 'campo_lote', width: 20 },
+            { header: 'CULTIVO', key: 'cultivo', width: 16 },
+            { header: 'VARIEDAD', key: 'variedad', width: 16 },
+            { header: 'CAMPAÑA', key: 'campana', width: 14, halign: 'center' },
+            { header: 'KG BRUTOS (ING)', key: 'kg_brutos', width: 18, halign: 'right', numero: true },
+            { header: 'KG EGRESADOS', key: 'kg_egresados', width: 18, halign: 'right', numero: true },
+            { header: 'STOCK NETO (KG)', key: 'stock_neto', width: 20, halign: 'right', numero: true, destacada: true },
+            { header: 'ESTADO', key: 'estado', width: 15, halign: 'center' },
+            { header: 'METROS SILO', key: 'mtrs', width: 14, halign: 'right', numero: true }
+        ];
+
+        let totalBruto = 0;
+        let totalEgresado = 0;
+        let totalNeto = 0;
+
+        const filasProcesadas = datos.map(s => {
+            const bruto = Number(s.kg_en_silo || 0);
+            const egresado = typeof this.m_kilosEgresadosDe === 'function' ? this.m_kilosEgresadosDe(s) : Number(s.kg_egresados || 0);
+            const neto = typeof this.m_stockRealDe === 'function' ? this.m_stockRealDe(s) : (bruto - egresado);
+            const infra = s.silo_n ? `SILO ${s.silo_n}` : `DEPÓSITO ${s.deposito || 'GRAL'}`;
+
+            totalBruto += bruto;
+            totalEgresado += egresado;
+            totalNeto += neto;
+
+            return {
+                infra: infra.toUpperCase(),
+                establecimiento: (s.establecimiento || '-').toUpperCase(),
+                campo_lote: `${(s.campo || '-').toUpperCase()} · Lote ${s.lote || 0}`,
+                cultivo: (s.cultivo || '-').toUpperCase(),
+                variedad: s.variedad || 'GENERAL',
+                campana: s.campaña || '2025/2026',
+                kg_brutos: bruto,
+                kg_egresados: egresado,
+                stock_neto: neto,
+                estado: neto > 0 ? 'CON STOCK' : 'VACÍO',
+                mtrs: parseFloat(s.mtrs_silo || 0)
+            };
+        });
+
+        try {
+            const wb = new ExcelJS.Workbook();
+            wb.creator = 'Salvucci Gestión · AgroSoft J&L';
+            wb.created = new Date();
+
+            const ws = wb.addWorksheet('Control de Acopio y Silos', {
+                views: [{ state: 'frozen', ySplit: 5 }],
+                pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+            });
+
+            ws.columns = columnas.map(c => ({ header: c.header, key: c.key, width: c.width }));
+            filasProcesadas.forEach(f => ws.addRow(f));
+
+            // Membrete Institucional
+            ws.spliceRows(1, 0, [], [], [], []);
+            const nCols = columnas.length;
+
+            ws.getRow(1).height = 30;
+            ws.getRow(2).height = 16;
+            ws.getRow(3).height = 15;
+            ws.getRow(4).height = 15;
+
+            for (let r = 1; r <= 4; r++) ws.mergeCells(r, 1, r, nCols);
+
+            const cTitulo = ws.getCell(1, 1);
+            cTitulo.value = 'SALVUCCI GESTIÓN — BALANCE GENERAL DE ACOPIO Y SILOS';
+            cTitulo.font = { bold: true, size: 14, color: { argb: SALVUCCI_CONF.argbDark } };
+            cTitulo.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            const cSub = ws.getCell(2, 1);
+            cSub.value = 'Auditoría física de infraestructura, ingresos brutos, despachos y existencias netas';
+            cSub.font = { italic: true, size: 9.5, color: { argb: 'FF556358' } };
+            cSub.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            const cEmpresa = ws.getCell(3, 1);
+            cEmpresa.value = `${SALVUCCI_CONF.empresaRazon} — Control de Báscula y Almacenamiento Central`;
+            cEmpresa.font = { size: 8.5, color: { argb: 'FF556358' } };
+            cEmpresa.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            const cMeta = ws.getCell(4, 1);
+            cMeta.value = `Folio: ${folio}   ·   Emitido: ${new Date().toLocaleString('es-AR')}   ·   Operador: ${operario}   ·   Unidades Relevadas: ${datos.length}`;
+            cMeta.font = { bold: true, size: 8.5, color: { argb: SALVUCCI_CONF.argbTema } };
+            cMeta.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            // Encabezado
+            const filaHead = ws.getRow(5);
+            filaHead.height = 24;
+            filaHead.eachCell({ includeEmpty: true }, cell => {
+                cell.font = { bold: true, size: 9.5, color: { argb: 'FFFFFFFF' } };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SALVUCCI_CONF.argbTema } };
+                cell.alignment = { vertical: 'middle', horizontal: 'center' };
+                cell.border = { bottom: { style: 'thin', color: { argb: SALVUCCI_CONF.argbDark } } };
+            });
+
+            const primeraFila = 6;
+            const ultimaFila = primeraFila + filasProcesadas.length - 1;
+
+            for (let r = primeraFila; r <= ultimaFila; r++) {
+                const fila = ws.getRow(r);
+                columnas.forEach((c, i) => {
+                    const cell = fila.getCell(i + 1);
+                    cell.alignment = { vertical: 'middle', horizontal: c.halign || 'left' };
+                    cell.font = { size: 9, bold: !!c.destacada };
+                    cell.border = {
+                        top: { style: 'hair', color: { argb: 'FFE0DCD4' } },
+                        bottom: { style: 'hair', color: { argb: 'FFE0DCD4' } }
+                    };
+                    if (c.numero) cell.numFmt = '#,##0';
+                    if (c.key === 'kg_egresados') {
+                        cell.font = { size: 9, color: { argb: 'FFC62828' } };
+                    }
+                    if (c.key === 'stock_neto') {
+                        const val = Number(cell.value || 0);
+                        cell.font = { size: 9, bold: true, color: { argb: val > 0 ? 'FF1E6B4C' : 'FFC62828' } };
+                    }
+                    if (c.key === 'estado') {
+                        const val = String(cell.value || '');
+                        cell.font = { size: 8.5, bold: true, color: { argb: val === 'CON STOCK' ? 'FF1E6B4C' : 'FF8E8E93' } };
+                    }
+                });
+                if ((r - primeraFila) % 2 === 1) {
+                    fila.eachCell({ includeEmpty: true }, cell => {
+                        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9FBF9' } };
+                    });
+                }
+            }
+
+            // Fila de Totales con fórmula nativa SUM
+            const filaTot = ws.getRow(ultimaFila + 2);
+            filaTot.height = 22;
+            columnas.forEach((c, i) => {
+                const cell = filaTot.getCell(i + 1);
+                if (i === 0) cell.value = 'TOTALES GENERALES';
+                else if (c.key === 'kg_brutos' || c.key === 'kg_egresados' || c.key === 'stock_neto') {
+                    const colLetra = cell.address.replace(/\d+$/, '');
+                    cell.value = { formula: `SUM(${colLetra}${primeraFila}:${colLetra}${ultimaFila})` };
+                    cell.numFmt = '#,##0';
+                }
+                cell.font = { bold: true, size: 9.5, color: { argb: 'FFFFFFFF' } };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SALVUCCI_CONF.argbDark } };
+                cell.alignment = { vertical: 'middle', horizontal: c.halign || 'left' };
+            });
+
+            // Hoja 2: Resumen Ejecutivo de Ocupación
+            const wsRes = wb.addWorksheet('Resumen de Capacidad');
+            wsRes.columns = [{ header: 'INDICADOR', key: 'label', width: 34 }, { header: 'VALOR', key: 'valor', width: 22 }];
+            wsRes.getRow(1).eachCell(cell => {
+                cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SALVUCCI_CONF.argbTema } };
+                cell.alignment = { vertical: 'middle', horizontal: 'center' };
+            });
+            wsRes.getRow(1).height = 22;
+
+            const resumenKpi = [
+                { label: 'Unidades de Infraestructura', valor: String(datos.length) },
+                { label: 'Ingreso Acumulado Bruto', valor: `${totalBruto.toLocaleString('es-AR')} KG` },
+                { label: 'Total Egresos / Despachos', valor: `${totalEgresado.toLocaleString('es-AR')} KG` },
+                { label: 'Stock Físico Neto Disponible', valor: `${totalNeto.toLocaleString('es-AR')} KG` },
+                { label: 'Silos con Carga Activa', valor: String(filasProcesadas.filter(f => f.stock_neto > 0).length) },
+                { label: 'Silos Vacíos / Disponibles', valor: String(filasProcesadas.filter(f => f.stock_neto <= 0).length) },
+                { label: 'Folio de Auditoría', valor: folio },
+                { label: 'Fecha de Emisión', valor: new Date().toLocaleString('es-AR') },
+                { label: 'Operador Responsable', valor: operario }
+            ];
+            resumenKpi.forEach(r => wsRes.addRow({ label: r.label, valor: r.valor }));
+
+            const nombreArchivo = `Salvucci_Acopio_Stock_${hoyStr}.xlsx`;
+            const buffer = await wb.xlsx.writeBuffer();
+
+            if (esElectron) {
+                guardarEnDescargas(nombreArchivo, Buffer.from(buffer));
+            } else {
+                const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                descargarNativoBlob(blob, nombreArchivo);
+            }
+
+            if (this.m_notificarApple) this.m_notificarApple(`✓ Reporte Excel generado: ${nombreArchivo}`, "exito");
+            else alert(`Excel generado con éxito: ${nombreArchivo}`);
+
+        } catch (err) {
+            console.error("Error generando Excel de acopio:", err);
+            this.m_exportarCsvFallbackAcopio(datos);
+        }
+    },
+
+    m_exportarCsvFallbackAcopio: function(datos) {
         const headers = [
             "INFRAESTRUCTURA", "REGISTRO ACOPIO", "ESTABLECIMIENTO", "CAMPO", "LOTE",
             "CULTIVO", "VARIEDAD", "CAMPAÑA", "COORDENADAS", "KG BRUTOS", "KG EGRESADOS", "STOCK NETO (KG)",
@@ -1526,8 +1724,8 @@ const ModuloAcopio = {
         csvContent += headers.join(";") + "\n";
 
         datos.forEach(s => {
-            const stockReal = this.m_stockRealDe(s);
-            const egresado = this.m_kilosEgresadosDe(s);
+            const stockReal = typeof this.m_stockRealDe === 'function' ? this.m_stockRealDe(s) : (Number(s.kg_en_silo || 0) - Number(s.kg_egresados || 0));
+            const egresado = typeof this.m_kilosEgresadosDe === 'function' ? this.m_kilosEgresadosDe(s) : Number(s.kg_egresados || 0);
             const infra = s.silo_n ? `SILO ${s.silo_n}` : `DEPOSITO ${s.deposito || ''}`;
             const fila = [
                 `"${infra}"`, s.registro_aco, `"${s.establecimiento || ''}"`, `"${s.campo || ''}"`,
@@ -1538,62 +1736,295 @@ const ModuloAcopio = {
         });
 
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.setAttribute("download", `Salvucci_Acopio_Stock_${Date.now()}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        const nombreArchivo = `Salvucci_Acopio_Stock_${Date.now()}.csv`;
+        descargarNativoBlob(blob, nombreArchivo);
+        if (this.m_notificarApple) this.m_notificarApple("Planilla generada con éxito.", "exito");
     },
 
     m_exportarPDF: function() {
-        const datos = this.m_obtenerDatosFiltrados();
-        if (datos.length === 0) return alert("No hay registros para emitir el reporte.");
+        const datos = this.m_obtenerDatosFiltrados() || [];
+        if (datos.length === 0) {
+            return this.m_notificarApple ? this.m_notificarApple("No hay registros para emitir el reporte.", "error") : alert("No hay registros para emitir el reporte.");
+        }
 
-        const totalNeto = datos.reduce((a, c) => a + this.m_stockRealDe(c), 0);
+        const totalNeto = datos.reduce((a, c) => a + (typeof this.m_stockRealDe === 'function' ? this.m_stockRealDe(c) : (Number(c.kg_en_silo || 0) - Number(c.kg_egresados || 0))), 0);
         const totalBruto = datos.reduce((a, c) => a + (Number(c.kg_en_silo) || 0), 0);
+        const totalEgresado = datos.reduce((a, c) => a + (typeof this.m_kilosEgresadosDe === 'function' ? this.m_kilosEgresadosDe(c) : Number(c.kg_egresados || 0)), 0);
 
+        const esElectron = typeof require === 'function';
+        const folio = generarFolio('ACP');
+        const hoyStr = new Date().toISOString().split('T')[0];
+        const emitido = new Date().toLocaleString('es-AR');
+        const operario = (typeof operarioName !== 'undefined' ? operarioName : (window.operarioGlobal || 'ADMINISTRADOR')).toUpperCase();
+
+        const tieneJsPDF = typeof window.jspdf !== 'undefined' || (esElectron && (() => { try { require('jspdf'); return true; } catch(e) { return false; } })());
+
+        if (tieneJsPDF) {
+            try {
+                const { jsPDF } = esElectron ? require('jspdf') : window.jspdf;
+                if (esElectron) require('jspdf-autotable');
+
+                const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'landscape' });
+                const pageW = doc.internal.pageSize.getWidth();
+                const pageH = doc.internal.pageSize.getHeight();
+                const margen = 12;
+                const ALTO_HEADER = 38;
+                const ALTO_PIE = 14;
+                const logoBase64 = cargarLogoBase64();
+
+                function dibujarEncabezado(data) {
+                    const pagina = data && data.pageNumber ? data.pageNumber : 1;
+
+                    doc.setFillColor(SALVUCCI_CONF.rgbTema[0], SALVUCCI_CONF.rgbTema[1], SALVUCCI_CONF.rgbTema[2]);
+                    doc.rect(0, 0, pageW, 3, 'F');
+                    doc.setFillColor(248, 250, 248);
+                    doc.rect(0, 3, pageW, ALTO_HEADER - 3, 'F');
+
+                    if (logoBase64) {
+                        try { doc.addImage('data:image/png;base64,' + logoBase64, 'PNG', margen, 6.5, 19, 19); } catch (e) {}
+                    } else {
+                        doc.setDrawColor(200, 205, 208);
+                        doc.setLineWidth(0.3);
+                        doc.roundedRect(margen, 6.5, 19, 19, 2, 2, 'D');
+                    }
+
+                    const xTexto = margen + 24;
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(13);
+                    doc.setTextColor(SALVUCCI_CONF.rgbTemaDark[0], SALVUCCI_CONF.rgbTemaDark[1], SALVUCCI_CONF.rgbTemaDark[2]);
+                    doc.text('SALVUCCI GESTIÓN · STOCK DE ACOPIO E INFRAESTRUCTURA', xTexto, 12.5);
+
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(8);
+                    doc.setTextColor(85, 99, 88);
+                    doc.text('Balance de Granos en Silos, Silobolsas y Galpones de Acopio', xTexto, 17);
+
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(10.5);
+                    doc.setTextColor(SALVUCCI_CONF.rgbTema[0], SALVUCCI_CONF.rgbTema[1], SALVUCCI_CONF.rgbTema[2]);
+                    doc.text('EXISTENCIAS FÍSICAS DISPONIBLES', xTexto, 24.5);
+
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(7.5);
+                    doc.setTextColor(110, 120, 115);
+                    doc.text(`Unidades: ${datos.length} silos/depósitos   ·   Carga Bruta: ${totalBruto.toLocaleString('es-AR')} KG`, xTexto, 29);
+
+                    const anchoCb = 60;
+                    const xCb = pageW - margen - anchoCb;
+                    dibujarCodigoBarrasPdf(doc, folio, xCb, 6.5, anchoCb, 10);
+
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(7.2);
+                    doc.setTextColor(90, 100, 95);
+                    doc.text(`Emitido: ${emitido}`, pageW - margen, 24, { align: 'right' });
+                    doc.text(`Operador: ${operario}`, pageW - margen, 28, { align: 'right' });
+                    doc.text(`Stock Neto: ${totalNeto.toLocaleString('es-AR')} KG   ·   Hoja ${pagina}`, pageW - margen, 32, { align: 'right' });
+
+                    doc.setDrawColor(SALVUCCI_CONF.rgbTema[0], SALVUCCI_CONF.rgbTema[1], SALVUCCI_CONF.rgbTema[2]);
+                    doc.setLineWidth(0.5);
+                    doc.line(margen, ALTO_HEADER - 2, pageW - margen, ALTO_HEADER - 2);
+                }
+
+                const columnasPdf = [
+                    { header: 'INFRAESTRUCTURA', dataKey: 'infra', cellWidth: 34 },
+                    { header: 'ESTABLECIMIENTO', dataKey: 'establecimiento', cellWidth: 38 },
+                    { header: 'CAMPO / LOTE', dataKey: 'campo_lote', cellWidth: 34 },
+                    { header: 'CULTIVO', dataKey: 'cultivo', cellWidth: 30 },
+                    { header: 'CAMPAÑA', dataKey: 'campana', cellWidth: 22, halign: 'center' },
+                    { header: 'COORDENADAS', dataKey: 'ubicacion', cellWidth: 32 },
+                    { header: 'BRUTO KG', dataKey: 'bruto', cellWidth: 26, halign: 'right' },
+                    { header: 'EGRESADO', dataKey: 'egresado', cellWidth: 26, halign: 'right' },
+                    { header: 'NETO ACTUAL', dataKey: 'neto', cellWidth: 31, halign: 'right' }
+                ];
+
+                const filasPdf = datos.map(s => {
+                    const net = typeof this.m_stockRealDe === 'function' ? this.m_stockRealDe(s) : (Number(s.kg_en_silo || 0) - Number(s.kg_egresados || 0));
+                    const eg = typeof this.m_kilosEgresadosDe === 'function' ? this.m_kilosEgresadosDe(s) : Number(s.kg_egresados || 0);
+                    const infra = s.silo_n ? `SILO ${s.silo_n}` : `DEPÓSITO ${s.deposito || 'GRAL'}`;
+
+                    return {
+                        infra: infra.toUpperCase(),
+                        establecimiento: (s.establecimiento || '-').toUpperCase(),
+                        campo_lote: `${(s.campo || '-').toUpperCase()} · Lote ${s.lote || 0}`,
+                        cultivo: (s.cultivo || '-').toUpperCase(),
+                        campana: s.campaña || '2025/2026',
+                        ubicacion: s.ubicacion || 'S/D',
+                        bruto: Number(s.kg_en_silo || 0).toLocaleString('es-AR'),
+                        egresado: eg.toLocaleString('es-AR'),
+                        neto: `${net.toLocaleString('es-AR')} KG`,
+                        _rawNeto: net
+                    };
+                });
+
+                doc.autoTable({
+                    startY: ALTO_HEADER + 4,
+                    margin: { left: margen, right: margen, top: ALTO_HEADER + 4, bottom: ALTO_PIE + 6 },
+                    columns: columnasPdf,
+                    body: filasPdf,
+                    headStyles: {
+                        fillColor: SALVUCCI_CONF.rgbTema,
+                        textColor: 255,
+                        fontSize: 7.5,
+                        fontStyle: 'bold',
+                        halign: 'center',
+                        valign: 'middle'
+                    },
+                    styles: {
+                        fontSize: 7.2,
+                        cellPadding: 2,
+                        lineColor: [224, 220, 212],
+                        lineWidth: 0.12,
+                        valign: 'middle'
+                    },
+                    alternateRowStyles: { fillColor: [248, 250, 248] },
+                    columnStyles: {
+                        infra: { fontStyle: 'bold', textColor: SALVUCCI_CONF.rgbTemaDark },
+                        cultivo: { fontStyle: 'bold', textColor: SALVUCCI_CONF.rgbTema },
+                        egresado: { textColor: [198, 40, 40] },
+                        neto: { fontStyle: 'bold' }
+                    },
+                    didParseCell: function(data) {
+                        if (data.section === 'body' && data.column.dataKey === 'neto') {
+                            const raw = filasPdf[data.row.index]?._rawNeto || 0;
+                            data.cell.styles.textColor = raw <= 0 ? [198, 40, 40] : SALVUCCI_CONF.rgbTema;
+                        }
+                    },
+                    theme: 'grid',
+                    didDrawPage: dibujarEncabezado
+                });
+
+                let y = ((doc.lastAutoTable && doc.lastAutoTable.finalY) || ALTO_HEADER + 4) + 6;
+
+                // Panel Resumen KPI de Acopio
+                const altoBloque = 36;
+                if (y + altoBloque > pageH - ALTO_PIE) {
+                    doc.addPage();
+                    dibujarEncabezado({ pageNumber: doc.internal.getNumberOfPages() });
+                    y = ALTO_HEADER + 6;
+                }
+
+                const anchoPanel = pageW - margen * 2;
+                doc.setFillColor(248, 250, 248);
+                doc.setDrawColor(220, 225, 222);
+                doc.setLineWidth(0.25);
+                doc.roundedRect(margen, y, anchoPanel, 18, 2, 2, 'FD');
+
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(7.8);
+                doc.setTextColor(SALVUCCI_CONF.rgbTema[0], SALVUCCI_CONF.rgbTema[1], SALVUCCI_CONF.rgbTema[2]);
+                doc.text('RESUMEN GENERAL DE INFRAESTRUCTURA Y ACOPIO', margen + 5, y + 5);
+
+                const itemsRes = [
+                    { label: 'UNIDADES ACTIVAS', val: String(datos.length) },
+                    { label: 'INGRESO BRUTO TOTAL', val: `${totalBruto.toLocaleString('es-AR')} KG` },
+                    { label: 'EGRESOS ACUMULADOS', val: `${totalEgresado.toLocaleString('es-AR')} KG` },
+                    { label: 'STOCK NETO DISPONIBLE', val: `${totalNeto.toLocaleString('es-AR')} KG` }
+                ];
+
+                const anchoItem = (anchoPanel - 10) / itemsRes.length;
+                itemsRes.forEach((it, idx) => {
+                    const xi = margen + 5 + anchoItem * idx;
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(6.4);
+                    doc.setTextColor(110, 120, 115);
+                    doc.text(it.label, xi, y + 10);
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(9.5);
+                    doc.setTextColor(SALVUCCI_CONF.rgbTemaDark[0], SALVUCCI_CONF.rgbTemaDark[1], SALVUCCI_CONF.rgbTemaDark[2]);
+                    doc.text(it.val, xi, y + 14.8);
+                });
+
+                // Panel de Firma
+                const yFirma = y + 28;
+                doc.setDrawColor(120, 130, 125);
+                doc.setLineWidth(0.25);
+                doc.line(margen + 25, yFirma, margen + 95, yFirma);
+                doc.line(pageW - margen - 95, yFirma, pageW - margen - 25, yFirma);
+
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(7.2);
+                doc.setTextColor(90, 100, 95);
+                doc.text('Responsable de Acopio / Silos', margen + 60, yFirma + 3.8, { align: 'center' });
+                doc.text('Auditoría General / Logística', pageW - margen - 60, yFirma + 3.8, { align: 'center' });
+
+                const totalPaginas = doc.internal.getNumberOfPages();
+                for (let i = 1; i <= totalPaginas; i++) {
+                    doc.setPage(i);
+                    doc.setDrawColor(220, 225, 222);
+                    doc.setLineWidth(0.2);
+                    doc.line(margen, pageH - 10, pageW - margen, pageH - 10);
+
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(7);
+                    doc.setTextColor(90, 100, 95);
+                    doc.text(SALVUCCI_CONF.pieInstitucional, margen, pageH - 6);
+
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(6.8);
+                    doc.text(`Folio ${folio}   ·   Página ${i} de ${totalPaginas}`, pageW - margen, pageH - 6, { align: 'right' });
+                }
+
+                const nombre = `Salvucci_Acopio_Stock_${hoyStr}.pdf`;
+
+                if (esElectron) {
+                    guardarEnDescargas(nombre, Buffer.from(doc.output('arraybuffer')));
+                    if (this.m_notificarApple) this.m_notificarApple(`✓ PDF guardado en Descargas: ${nombre}`, "exito");
+                    else alert(`PDF guardado en Descargas: ${nombre}`);
+                } else {
+                    doc.save(nombre);
+                }
+                return;
+
+            } catch (err) {
+                console.warn("Fallo jsPDF en acopio, usando ventana de impresión:", err);
+            }
+        }
+
+        // Respaldo Web con código de barras en base64
+        const cbWebBase64 = codigoBarrasPngBase64(folio, 320, 50) || '';
         const ventanaImpresion = window.open('', '_blank');
         ventanaImpresion.document.write(`
             <html>
             <head>
+                <meta charset="UTF-8">
                 <title>Salvucci Gestión - Control de Acopio y Stock</title>
                 <style>
                     @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&display=swap');
-                    body { font-family: 'Roboto', sans-serif; color: #211C16; padding: 35px; margin: 0; background: #F5F4F1; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-                    .header-pdf-premium { border-bottom: 3px solid #1E6B4C; padding-bottom: 14px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; background:#FFFFFF; padding:18px; border-radius:12px; border:1px solid #E0DCD4; }
-                    .logo-container-apple { width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; margin-right: 15px; }
-                    .logo-container-apple img { width: 100%; height: 100%; object-fit: contain; }
-                    .titulos-reporte h1 { margin: 0; font-size: 18px; font-weight: 900; color: #123F2C; }
-                    .titulos-reporte h2 { margin: 3px 0 0 0; font-size: 11px; color: #1E6B4C; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
-                    .kpi-tile-top { background:rgba(30,107,76,0.08); border:1px solid rgba(30,107,76,0.25); padding:8px 14px; border-radius:8px; text-align:right; }
-                    table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 8px; background:#FFFFFF; border-radius:8px; overflow:hidden; }
-                    th { background: #123F2C; color: #FFFFFF; text-align: left; padding: 8px; font-weight: 700; }
-                    td { padding: 7px 8px; border-bottom: 1px solid #E0DCD4; color: #211C16; }
-                    .footer-firma-fija { margin-top: 30px; border-top: 1px solid #E0DCD4; padding-top: 15px; display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: #6B6255; page-break-inside: avoid; }
-                    @media print { body { background: #FFFFFF; padding: 15px; } }
+                    @page { size: landscape; margin: 10mm; }
+                    body { font-family: 'Roboto', sans-serif; color: #211C16; padding: 25px; margin: 0; background: #FFFFFF; font-size: 11px; }
+                    .header-pdf-premium { border-bottom: 2.5px solid #1E6B4C; padding: 14px 18px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; background: #F8FAF8; border-radius: 8px; border: 1px solid #D2D7D3; }
+                    .logo-box { width: 55px; height: 55px; display: flex; align-items: center; justify-content: center; margin-right: 14px; }
+                    .logo-box img { width: 100%; height: 100%; object-fit: contain; }
+                    .titulos h1 { margin: 0; font-size: 16px; font-weight: 900; color: #123F2C; }
+                    .titulos h2 { margin: 2px 0 0 0; font-size: 10px; color: #1E6B4C; font-weight: 800; text-transform: uppercase; }
+                    .kpi-tile-top { background: #FFFFFF; border: 1px solid #C8E6C9; padding: 6px 14px; border-radius: 6px; text-align: right; }
+                    table { width: 100%; border-collapse: collapse; font-size: 9.5px; margin-top: 8px; }
+                    th { background: #1E6B4C; color: #FFFFFF; text-align: left; padding: 6px 8px; font-weight: 700; text-transform: uppercase; font-size: 8px; }
+                    td { padding: 5px 8px; border-bottom: 1px solid #E2E8F0; }
+                    tr:nth-child(even) { background: #FAFBFA; }
+                    .footer-firma-fija { margin-top: 25px; border-top: 1px solid #D2D7D3; padding-top: 15px; display: flex; justify-content: space-between; align-items: center; font-size: 9px; color: #556358; }
                 </style>
             </head>
             <body>
                 <div class="header-pdf-premium">
                     <div style="display:flex; align-items:center;">
-                        <div class="logo-container-apple">
+                        <div class="logo-box">
                             <img src="logo.png" onerror="this.style.display='none';" />
                         </div>
-                        <div class="titulos-reporte">
+                        <div class="titulos">
                             <h2>SALVUCCI GESTIÓN · STOCK DE ACOPIO</h2>
                             <h1>REPORTE GENERAL DE INFRAESTRUCTURA</h1>
+                            <p>${SALVUCCI_CONF.empresaDomicilio} · Operador: ${operario}</p>
                         </div>
                     </div>
-                    <div class="kpi-tile-top">
-                        <div style="font-size:9px; color:#6B6255; font-weight:700; text-transform:uppercase;">Stock Neto Disponible</div>
-                        <div style="font-size:16px; font-weight:900; color:#1E6B4C;">${totalNeto.toLocaleString('es-AR')} KG</div>
-                        <small style="font-size:9px; color:#6B6255;">Carga Bruta: ${totalBruto.toLocaleString('es-AR')} kg</small>
+                    <div style="display:flex; align-items:center; gap:16px;">
+                        ${cbWebBase64 ? `<img src="${cbWebBase64}" style="height:38px;" />` : ''}
+                        <div class="kpi-tile-top">
+                            <div style="font-size:8.5px; color:#556358; font-weight:700; text-transform:uppercase;">Stock Neto Disponible</div>
+                            <div style="font-size:15px; font-weight:900; color:#1E6B4C;">${totalNeto.toLocaleString('es-AR')} KG</div>
+                            <small style="font-size:8px; color:#556358;">Bruto: ${totalBruto.toLocaleString('es-AR')} KG | Egresado: ${totalEgresado.toLocaleString('es-AR')} KG</small>
+                        </div>
                     </div>
-                </div>
-
-                <div style="margin-bottom:8px; font-size:11px; font-weight:800; color:#123F2C; text-transform:uppercase;">
-                    ■ BALANCE DETALLADO POR SILO Y DEPÓSITO (${datos.length})
                 </div>
 
                 <table>
@@ -1606,33 +2037,40 @@ const ModuloAcopio = {
                     </thead>
                     <tbody>
                         ${datos.map(s => {
-                            const net = this.m_stockRealDe(s);
-                            const eg = this.m_kilosEgresadosDe(s);
+                            const net = typeof this.m_stockRealDe === 'function' ? this.m_stockRealDe(s) : (Number(s.kg_en_silo || 0) - Number(s.kg_egresados || 0));
+                            const eg = typeof this.m_kilosEgresadosDe === 'function' ? this.m_kilosEgresadosDe(s) : Number(s.kg_egresados || 0);
                             return `
                                 <tr>
                                     <td><b>${s.silo_n ? 'SILO ' + s.silo_n : (s.deposito || 'GALPÓN')}</b></td>
-                                    <td>${s.establecimiento || '-'}</td>
-                                    <td>${s.campo || '-'} · Lote ${s.lote || 0}</td>
+                                    <td>${(s.establecimiento || '-').toUpperCase()}</td>
+                                    <td>${(s.campo || '-').toUpperCase()} · Lote ${s.lote || 0}</td>
                                     <td><strong style="color:#1E6B4C;">${(s.cultivo || '').toUpperCase()}</strong></td>
                                     <td>${s.campaña || '-'}</td>
                                     <td>${s.ubicacion || 'S/D'}</td>
                                     <td style="text-align:right;">${Number(s.kg_en_silo || 0).toLocaleString('es-AR')}</td>
-                                    <td style="text-align:right; color:#E0342A;">${eg.toLocaleString('es-AR')}</td>
-                                    <td style="text-align:right; font-weight:800; color:#1E6B4C;">${net.toLocaleString('es-AR')} KG</td>
+                                    <td style="text-align:right; color:#C62828;">-${eg.toLocaleString('es-AR')}</td>
+                                    <td style="text-align:right; font-weight:bold; color:${net <= 0 ? '#C62828' : '#1E6B4C'};">${net.toLocaleString('es-AR')} KG</td>
                                 </tr>
                             `;
                         }).join('')}
+                        <tr style="background:#ECEFF1; font-weight:bold;">
+                            <td colspan="6">TOTALES GENERALES</td>
+                            <td style="text-align:right;">${totalBruto.toLocaleString('es-AR')} KG</td>
+                            <td style="text-align:right; color:#C62828;">-${totalEgresado.toLocaleString('es-AR')} KG</td>
+                            <td style="text-align:right; color:#1E6B4C;">${totalNeto.toLocaleString('es-AR')} KG</td>
+                        </tr>
                     </tbody>
                 </table>
 
                 <div class="footer-firma-fija">
-                    <span>Salvucci Gestión &bull; Ecosistema de Acopio y Balanza</span>
+                    <span>${SALVUCCI_CONF.pieInstitucional}</span>
+                    <span>Folio: ${folio} · Emitido: ${emitido}</span>
                     <span style="font-weight:bold;">Firma Responsable Acopio: ___________________________</span>
                 </div>
 
                 <script>
-                    window.onload = function() { setTimeout(() => { window.print(); window.close(); }, 300); }
-                </script>
+                    window.onload = function() { setTimeout(() => { window.print(); window.close(); }, 350); };
+                <\/script>
             </body>
             </html>
         `);

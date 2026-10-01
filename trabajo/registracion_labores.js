@@ -3,16 +3,23 @@
  * Basado en tabla física: public.egresos_insumos
  * AgroSoft J&L - Mode "No me quites nada" + Full Sequential Ledger calculations (SQLite Local-First Engine)
  */
-const ModuloLabores = {
+/**
+ * ModuloLabores: Gestión de Labores Agronómicas y Aplicaciones de Campo
+ * AgroSoft J&L - "Apple Soft Studio" Edition / Tipografía Roboto
+ * Mode: Local-First (Engine SQLite IPC) + "No me quites nada" + Max(registro)+1 + sincronizado = 0
+ */
+
+// ACA ES LO NUEVO: Asignación global directa para evitar "ModuloLabores is not defined"
+window.ModuloLabores = {
     parametros: {
-        campos: [],   // Datos locales de campos
+        campos: [],   // Datos locales de campos y establecimientos
         cuadros: [],  // Caché local para cuadros e hidratación de superficies
-        insumos: [],  // Datos de stock/insumos
+        insumos: [],  // Catálogo maestro e insumos disponibles
         labores: [],  // Datos locales de tipos_labores
-        egresos: []   // Historial local de egresos_insumos (Filtrado por tabla_origen = 'LABOR')
+        egresos: []   // Historial local de egresos_insumos (tabla_origen = 'LABOR')
     },
 
-    // ESTO LO MODIFIQUE / ACA ES LO NUEVO: Helper IPC para conectar con SQLite local
+    // ESTO LO MODIFIQUE: Helper IPC universal con soporte para window.q, apiLocal y electronAPI
     m_ejecutarSqlLocal: async function(sql, params = []) {
         if (window.apiLocal && window.apiLocal.query) {
             return await window.apiLocal.query({ sql, params });
@@ -20,9 +27,13 @@ const ModuloLabores = {
         if (window.electronAPI && window.electronAPI.invoke) {
             return await window.electronAPI.invoke('local-db-query', { sql, params });
         }
-        throw new Error("No se encontró el puente IPC con la base de datos base local.");
+        if (typeof window.q === 'function') {
+            return await window.q(sql, ...params);
+        }
+        throw new Error("No se encontró el puente IPC con la base de datos local.");
     },
 
+    // ESTO LO MODIFIQUE: Modal base defensivo con cierre por clic exterior y estilo Apple Soft
     m_asegurarModalBase: function() {
         const modalExistente = document.getElementById('modal-agrosoft');
         const tituloExistente = document.getElementById('modal-titulo');
@@ -31,22 +42,18 @@ const ModuloLabores = {
             if (modalExistente) modalExistente.remove(); // Limpieza defensiva de nodos huérfanos
             
             const modalHTML = `
-                <div id="modal-agrosoft" class="modal-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(18, 22, 28, 0.48); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); z-index: 99999; justify-content: center; align-items: center; padding: 20px; box-sizing: border-box;">
-                    <div class="modal-apple-content" style="background: #FFFFFF; border: 1px solid rgba(0,113,227,0.2); border-radius: 14px; padding: 25px; width: 95%; max-width: 850px; color: #1D1D1F; box-shadow: 0 9px 21px rgba(20,26,36,0.25); display: flex; flex-direction: column; position: relative;">
-                        <div class="modal-header-apple" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid rgba(0,113,227,0.15); padding-bottom: 12px;">
-                            <h3 id="modal-titulo" style="margin: 0; font-size: 1.2rem; font-weight: 800; font-family: 'Roboto', sans-serif; color: #0071E3; letter-spacing: -0.3px;">REGISTRO DE OPERACIÓN</h3>
+                <div id="modal-agrosoft" class="modal-overlay" style="display: none; position: fixed; inset: 0; width: 100vw; height: 100vh; background: rgba(18, 22, 28, 0.45); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); z-index: 999999; justify-content: center; align-items: center; padding: 16px; box-sizing: border-box;">
+                    <div id="modal-size-ctx" class="modal-apple-content scroll-apple" style="background: #FFFFFF !important; border: 1.5px solid #D2D7D3; border-radius: 16px; padding: 22px 26px; width: 95%; max-width: 850px; color: #1A211C; box-shadow: 0 16px 36px rgba(0,0,0,0.18); display: flex; flex-direction: column; position: relative; margin: auto; max-height: 90vh; overflow-y: auto;">
+                        <div class="modal-header-apple" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #E0DCD4; padding-bottom: 12px; background: #FFFFFF;">
+                            <h3 id="modal-titulo" style="margin: 0; font-size: 1.15rem; font-weight: 800; font-family: 'Roboto', sans-serif; color: #104630; letter-spacing: -0.3px;">REGISTRO DE OPERACIÓN</h3>
                             <button onclick="document.getElementById('modal-agrosoft').style.display='none'" style="background: #F0F2F5; border: none; color: #1D1D1F; font-size: 1.2rem; cursor: pointer; border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; font-weight: bold; transition: background 0.2s;">&times;</button>
                         </div>
-                        <div id="modal-formulario" style="max-height: 70vh; overflow-y: auto; padding-right: 5px;" class="scroll-apple"></div>
-                        <div class="modal-apple-footer" id="modal-acciones-footer" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 25px; border-top: 1px solid rgba(0,113,227,0.15); padding-top: 15px;">
-                            <button class="btn-cancel-soft" onclick="document.getElementById('modal-agrosoft').style.display='none'" style="background: #F0F2F5; color: #1D1D1F; border: none; padding: 10px 20px; font-weight: 700; border-radius: 8px; font-size: 0.8rem; cursor: pointer; font-family: 'Roboto';">CANCELAR</button>
-                            <button class="btn-save-soft" id="btn-guardar-despacho-action" style="background: #0071E3; color: #FFFFFF; border: none; padding: 10px 20px; font-weight: 700; border-radius: 8px; font-size: 0.8rem; cursor: pointer; font-family: 'Roboto'; box-shadow: 0 4px 12px rgba(0,113,227,0.25);">GUARDAR OPERACIÓN</button>
-                        </div>
+                        <div id="modal-formulario" style="max-height: 72vh; overflow-y: auto; padding-right: 4px; background: #FFFFFF;" class="scroll-apple"></div>
+                        <div class="modal-apple-footer" id="modal-acciones-footer" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; border-top: 1px solid #E0DCD4; padding-top: 14px;"></div>
                     </div>
                 </div>`;
             document.body.insertAdjacentHTML('beforeend', modalHTML);
 
-            // ACA ES LO NUEVO: Cierre intuitivo al hacer clic fuera del contenido del modal
             const elModalCreated = document.getElementById('modal-agrosoft');
             if (elModalCreated) {
                 elModalCreated.addEventListener('click', (e) => {
@@ -58,9 +65,7 @@ const ModuloLabores = {
         }
     },
 
-    /**
-     * ESTO LO MODIFIQUE: Carga 100% Offline desde SQLite Local vía IPC
-     */
+    // ESTO LO MODIFIQUE: Carga 100% Offline incluyendo la tabla maestra de insumos faltante
     m_inicializar: async function() {
         let visor = document.getElementById('pantalla-dinamica') || document.getElementById('contenedor-principal');
         if (!visor) {
@@ -68,25 +73,28 @@ const ModuloLabores = {
             visor.id = 'pantalla-dinamica';
             document.body.appendChild(visor);
         }
-        visor.innerHTML = '<div class="loader-apple" style="font-family:\'Roboto\', sans-serif; text-align:center; padding:50px; color:#0071E3; font-weight:600; letter-spacing:0.3px;">Cargando Estructura de Datos y Sábana Operativa desde base Local...</div>';
+        visor.innerHTML = '<div class="loader-apple" style="font-family:\'Roboto\', sans-serif; text-align:center; padding:50px; color:#1E6B4C; font-weight:700; letter-spacing:0.3px;">Cargando Estructura de Labores desde base Local...</div>';
 
         try {
-            const [resCampos, resLabores, resEgresos, resCuadros] = await Promise.all([
+            // ACA ES LO NUEVO: Se suma la consulta a la tabla insumos para hidratar parametros.insumos
+            const [resCampos, resLabores, resEgresos, resCuadros, resInsumos] = await Promise.all([
                 this.m_ejecutarSqlLocal(`SELECT * FROM campos ORDER BY establecimiento ASC`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM tipos_labores ORDER BY labor ASC`),
                 this.m_ejecutarSqlLocal(`SELECT * FROM egresos_insumos WHERE tabla_origen = 'LABOR' ORDER BY id DESC`),
-                this.m_ejecutarSqlLocal(`SELECT * FROM cuadros ORDER BY lote ASC`) // Caché local de cuadros y superficies
+                this.m_ejecutarSqlLocal(`SELECT * FROM cuadros ORDER BY lote ASC`),
+                this.m_ejecutarSqlLocal(`SELECT reg_local, articulo, rubro, sub_rubro, descripcion, unidad_medida FROM insumos ORDER BY articulo ASC`)
             ]);
 
             this.parametros.campos = resCampos.data || resCampos || [];
             this.parametros.labores = resLabores.data || resLabores || [];
             this.parametros.egresos = resEgresos.data || resEgresos || [];
             this.parametros.cuadros = resCuadros.data || resCuadros || [];
+            this.parametros.insumos = resInsumos.data || resInsumos || []; // ACA ES LO NUEVO
 
             this.m_dibujarInterfaz();
         } catch (err) {
-            console.error("Error en ModuloLabores Local:", err);
-            visor.innerHTML = `<div class="error-soft" style="color:#E0342A; padding:20px; font-family:'Roboto'; border: 1px solid rgba(224,52,42,0.2); background: rgba(224,52,42,0.04); border-radius: 12px;">Error al cargar datos locales: ${err.message}</div>`;
+            console.error("❌ Error en ModuloLabores Local:", err);
+            visor.innerHTML = `<div class="error-soft" style="color:#C62828; padding:20px; font-family:'Roboto'; border: 1px solid rgba(198,40,40,0.2); background: #FFEBEE; border-radius: 12px; font-weight: 700;">Error al cargar datos locales: ${err.message}</div>`;
         }
     },
 

@@ -810,14 +810,248 @@ const ModuloProduccion = {
         }
     },
 
-    m_exportarExcel: function() {
-        const datos = this.m_obtenerDatosFiltrados();
+    m_exportarExcel: async function() {
+        const datos = this.m_obtenerDatosFiltrados() || [];
         if (datos.length === 0) {
-            return alert("No hay registros cargados para exportar.");
+            return this.m_notificarApple ? this.m_notificarApple("No hay registros cargados para exportar.", "error") : alert("No hay registros cargados.");
         }
 
+        // 1. Detección universal de ExcelJS
+        let ExcelJS = null;
+        if (typeof window !== 'undefined' && window.ExcelJS) {
+            ExcelJS = window.ExcelJS;
+        } else if (typeof require === 'function') {
+            try { ExcelJS = require('exceljs'); } catch (e) { ExcelJS = null; }
+        }
+
+        const historial = this.filtroActual 
+            ? (this.datosHistorialInactivo || []).filter(h => (h.establecimiento || '').trim().toUpperCase() === this.filtroActual.trim().toUpperCase()) 
+            : (this.datosHistorialInactivo || []);
+
+        const sufijoFile = this.filtroActual ? this.filtroActual.replace(/\s+/g, '_') : 'General';
+
+        // Fallback a CSV si no está disponible la librería
+        if (!ExcelJS) {
+            return this.m_exportarCsvFallbackProduccion(datos, historial, sufijoFile);
+        }
+
+        const esElectron = typeof require === 'function' && typeof process !== 'undefined';
+        const folio = generarFolio('PRD');
+        const hoyStr = new Date().toISOString().split('T')[0];
+        const operario = (typeof operarioName !== 'undefined' ? operarioName : (window.operarioGlobal || 'ADMINISTRADOR')).toUpperCase();
+
+        const columnas = [
+            { header: 'CAMPAÑA', key: 'campana', width: 15, halign: 'center' },
+            { header: 'FECHA COSECHA', key: 'fecha', width: 16, halign: 'center' },
+            { header: 'ESTABLECIMIENTO', key: 'establecimiento', width: 22 },
+            { header: 'CAMPO / SECTOR', key: 'campo', width: 22 },
+            { header: 'LOTE', key: 'lote', width: 12, halign: 'center' },
+            { header: 'CULTIVO', key: 'cultivo', width: 18 },
+            { header: 'VARIEDAD', key: 'variedad', width: 18 },
+            { header: 'SUPERFICIE (HAS)', key: 'sup', width: 18, halign: 'right', numero: true },
+            { header: 'KILOS COSECHADOS', key: 'kilos', width: 20, halign: 'right', numero: true, destacada: true },
+            { header: 'RINDE (KG/HA)', key: 'rend_ha', width: 18, halign: 'right', numero: true, destacada: true }
+        ];
+
+        let totalKilos = 0;
+        let totalHas = 0;
+
+        const filasProduccion = datos.map(p => {
+            const supNum = parseFloat(p.sup) || 0;
+            const kgNum = parseFloat(p.kilos) || 0;
+            const rinde = supNum > 0 ? (kgNum / supNum) : (parseFloat(p.rend_ha) || 0);
+
+            totalHas += supNum;
+            totalKilos += kgNum;
+
+            return {
+                campana: p.campaña || '2025/2026',
+                fecha: p.fecha_cosecha || '-',
+                establecimiento: (p.establecimiento || '-').toUpperCase(),
+                campo: (p.campo || '-').toUpperCase(),
+                lote: `Lote ${p.lote || '-'}`,
+                cultivo: (p.cultivo || '-').toUpperCase(),
+                variedad: p.variedad || 'GENERAL',
+                sup: supNum,
+                kilos: kgNum,
+                rend_ha: parseFloat(rinde.toFixed(2))
+            };
+        });
+
+        try {
+            const wb = new ExcelJS.Workbook();
+            wb.creator = 'Salvucci Gestión · AgroSoft J&L';
+            wb.created = new Date();
+
+            // --- HOJA 1: PRODUCCIÓN Y RENDIMIENTOS ---
+            const ws = wb.addWorksheet('Cosechas y Rendimientos', {
+                views: [{ state: 'frozen', ySplit: 5 }],
+                pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+            });
+
+            ws.columns = columnas.map(c => ({ header: c.header, key: c.key, width: c.width }));
+            filasProduccion.forEach(f => ws.addRow(f));
+
+            // Membrete Institucional
+            ws.spliceRows(1, 0, [], [], [], []);
+            const nCols = columnas.length;
+
+            ws.getRow(1).height = 30;
+            ws.getRow(2).height = 16;
+            ws.getRow(3).height = 15;
+            ws.getRow(4).height = 15;
+
+            for (let r = 1; r <= 4; r++) ws.mergeCells(r, 1, r, nCols);
+
+            const cTitulo = ws.getCell(1, 1);
+            cTitulo.value = `SALVUCCI GESTIÓN — BALANCE DE PRODUCCIÓN AGRÍCOLA`;
+            cTitulo.font = { bold: true, size: 14, color: { argb: SALVUCCI_CONF.argbDark } };
+            cTitulo.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            const cSub = ws.getCell(2, 1);
+            cSub.value = `Reporte de cosecha, superficies y rendimientos por lote · Filtro: ${this.filtroActual ? this.filtroActual.toUpperCase() : 'CONSOLIDADO GENERAL'}`;
+            cSub.font = { italic: true, size: 9.5, color: { argb: 'FF556358' } };
+            cSub.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            const cEmpresa = ws.getCell(3, 1);
+            cEmpresa.value = `${SALVUCCI_CONF.empresaRazon} — Auditoría Central de Producción`;
+            cEmpresa.font = { size: 8.5, color: { argb: 'FF556358' } };
+            cEmpresa.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            const cMeta = ws.getCell(4, 1);
+            cMeta.value = `Folio: ${folio}   ·   Emitido: ${new Date().toLocaleString('es-AR')}   ·   Operador: ${operario}   ·   Cosechas: ${datos.length}`;
+            cMeta.font = { bold: true, size: 8.5, color: { argb: SALVUCCI_CONF.argbTema } };
+            cMeta.alignment = { vertical: 'middle', horizontal: 'left' };
+
+            // Cabecera
+            const filaHead = ws.getRow(5);
+            filaHead.height = 24;
+            filaHead.eachCell({ includeEmpty: true }, cell => {
+                cell.font = { bold: true, size: 9.5, color: { argb: 'FFFFFFFF' } };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SALVUCCI_CONF.argbTema } };
+                cell.alignment = { vertical: 'middle', horizontal: 'center' };
+                cell.border = { bottom: { style: 'thin', color: { argb: SALVUCCI_CONF.argbDark } } };
+            });
+
+            const primeraFila = 6;
+            const ultimaFila = primeraFila + filasProduccion.length - 1;
+
+            for (let r = primeraFila; r <= ultimaFila; r++) {
+                const fila = ws.getRow(r);
+                columnas.forEach((c, i) => {
+                    const cell = fila.getCell(i + 1);
+                    cell.alignment = { vertical: 'middle', horizontal: c.halign || 'left' };
+                    cell.font = { size: 9, bold: !!c.destacada };
+                    cell.border = {
+                        top: { style: 'hair', color: { argb: 'FFE0DCD4' } },
+                        bottom: { style: 'hair', color: { argb: 'FFE0DCD4' } }
+                    };
+                    if (c.numero) {
+                        cell.numFmt = (c.key === 'sup' || c.key === 'rend_ha') ? '#,##0.00' : '#,##0';
+                    }
+                    if (c.key === 'kilos' || c.key === 'rend_ha') {
+                        cell.font = { size: 9, bold: true, color: { argb: 'FF1E6B4C' } };
+                    }
+                });
+                if ((r - primeraFila) % 2 === 1) {
+                    fila.eachCell({ includeEmpty: true }, cell => {
+                        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9FBF9' } };
+                    });
+                }
+            }
+
+            // Fila de Totales con fórmula nativa SUM
+            const filaTot = ws.getRow(ultimaFila + 2);
+            filaTot.height = 22;
+            columnas.forEach((c, i) => {
+                const cell = filaTot.getCell(i + 1);
+                if (i === 0) cell.value = 'TOTALES Y RINDE PROMEDIO';
+                else if (c.key === 'sup' || c.key === 'kilos') {
+                    const colLetra = cell.address.replace(/\d+$/, '');
+                    cell.value = { formula: `SUM(${colLetra}${primeraFila}:${colLetra}${ultimaFila})` };
+                    cell.numFmt = c.key === 'sup' ? '#,##0.00' : '#,##0';
+                } else if (c.key === 'rend_ha') {
+                    const colKg = ws.getRow(ultimaFila + 2).getCell(9).address.replace(/\d+$/, '');
+                    const colHas = ws.getRow(ultimaFila + 2).getCell(8).address.replace(/\d+$/, '');
+                    cell.value = { formula: `IF(${colHas}${ultimaFila + 2}>0, ${colKg}${ultimaFila + 2}/${colHas}${ultimaFila + 2}, 0)` };
+                    cell.numFmt = '#,##0.00';
+                }
+                cell.font = { bold: true, size: 9.5, color: { argb: 'FFFFFFFF' } };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SALVUCCI_CONF.argbDark } };
+                cell.alignment = { vertical: 'middle', horizontal: c.halign || 'left' };
+            });
+
+            // --- HOJA 2: HISTORIAL DE SIEMBRA INACTIVA ---
+            if (historial.length > 0) {
+                const colsHist = [
+                    { header: 'ESTABLECIMIENTO', key: 'establecimiento', width: 22 },
+                    { header: 'CAMPO', key: 'campo', width: 20 },
+                    { header: 'LOCALIDAD', key: 'localidad', width: 18 },
+                    { header: 'LOTE', key: 'lote', width: 12, halign: 'center' },
+                    { header: 'SUPERFICIE', key: 'sup', width: 16, halign: 'right', numero: true },
+                    { header: 'CULTIVO', key: 'cultivo', width: 18 },
+                    { header: 'VARIEDAD', key: 'variedad', width: 18 },
+                    { header: 'FECHA SIEMBRA', key: 'fecha_siembra', width: 16, halign: 'center' },
+                    { header: 'FECHA CIERRE', key: 'fecha_cierre', width: 16, halign: 'center' }
+                ];
+                const wsHist = wb.addWorksheet('Historial Siembra Inactiva');
+                wsHist.columns = colsHist.map(c => ({ header: c.header, key: c.key, width: c.width }));
+                
+                historial.forEach(h => {
+                    wsHist.addRow({
+                        establecimiento: (h.establecimiento || '').toUpperCase(),
+                        campo: (h.campo || '').toUpperCase(),
+                        localidad: h.localidad || '-',
+                        lote: `Lote ${h.lote || '-'}`,
+                        sup: parseFloat(h.sup || 0),
+                        cultivo: (h.cultivo || '').toUpperCase(),
+                        variedad: h.variedad || '-',
+                        fecha_siembra: h.fecha_siembra || '-',
+                        fecha_cierre: h.fecha_cierre || '-'
+                    });
+                });
+
+                wsHist.getRow(1).height = 22;
+                wsHist.getRow(1).eachCell(cell => {
+                    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6B6255' } };
+                    cell.alignment = { vertical: 'middle', horizontal: 'center' };
+                });
+
+                for (let r = 2; r <= historial.length + 1; r++) {
+                    const fila = wsHist.getRow(r);
+                    colsHist.forEach((c, i) => {
+                        const cell = fila.getCell(i + 1);
+                        cell.alignment = { vertical: 'middle', horizontal: c.halign || 'left' };
+                        if (c.numero) cell.numFmt = '#,##0.00';
+                        if (c.key === 'fecha_cierre') {
+                            cell.font = { size: 8.5, bold: true, color: { argb: 'FFC62828' } };
+                        }
+                    });
+                }
+            }
+
+            const nombreArchivo = `Salvucci_Produccion_${sufijoFile}_${hoyStr}.xlsx`;
+            const buffer = await wb.xlsx.writeBuffer();
+
+            if (esElectron) {
+                guardarEnDescargas(nombreArchivo, Buffer.from(buffer));
+            } else {
+                const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                descargarNativoBlob(blob, nombreArchivo);
+            }
+
+            if (this.m_notificarApple) this.m_notificarApple(`✓ Reporte Excel generado: ${nombreArchivo}`, "exito");
+            else alert(`Excel generado con éxito: ${nombreArchivo}`);
+
+        } catch (err) {
+            console.error("Error generando Excel de Producción:", err);
+            this.m_exportarCsvFallbackProduccion(datos, historial, sufijoFile);
+        }
+    },
+
+    m_exportarCsvFallbackProduccion: function(datos, historial, sufijoFile) {
         const headers = ["ID REGISTRO", "CAMPAÑA", "FECHA COSECHA", "ESTABLECIMIENTO", "CAMPO/SECTOR", "LOTE", "CULTIVO", "VARIEDAD", "SUPERFICIE HAS", "KILOS TOTALES", "RENDIMIENTO KG/HA"];
-        
         let csvContent = "\uFEFF"; 
         csvContent += headers.join(";") + "\n";
 
@@ -838,84 +1072,311 @@ const ModuloProduccion = {
             csvContent += fila.join(";") + "\n";
         });
 
-        const historial = this.filtroActual ? this.datosHistorialInactivo.filter(h => (h.establecimiento || '').trim().toUpperCase() === this.filtroActual.trim().toUpperCase()) : this.datosHistorialInactivo;
-        csvContent += "\nHISTORIAL DE SIEMBRA INACTIVA\n";
-        csvContent += ["ESTABLECIMIENTO", "CAMPO", "LOCALIDAD", "LOTE", "SUP", "CULTIVO", "VARIEDAD", "FECHA SIEMBRA", "FECHA CIERRE"].join(";") + "\n";
-        historial.forEach(h => {
-            const fila = [
-                `"${h.establecimiento || ''}"`, `"${h.campo || ''}"`, `"${h.localidad || ''}"`, h.lote || '',
-                h.sup || 0, `"${(h.cultivo || '').toUpperCase()}"`, `"${h.variedad || ''}"`,
-                h.fecha_siembra || '', h.fecha_cierre || ''
-            ];
-            csvContent += fila.join(";") + "\n";
-        });
+        if (historial.length > 0) {
+            csvContent += "\nHISTORIAL DE SIEMBRA INACTIVA\n";
+            csvContent += ["ESTABLECIMIENTO", "CAMPO", "LOCALIDAD", "LOTE", "SUP", "CULTIVO", "VARIEDAD", "FECHA SIEMBRA", "FECHA CIERRE"].join(";") + "\n";
+            historial.forEach(h => {
+                const fila = [
+                    `"${h.establecimiento || ''}"`, `"${h.campo || ''}"`, `"${h.localidad || ''}"`, h.lote || '',
+                    h.sup || 0, `"${(h.cultivo || '').toUpperCase()}"`, `"${h.variedad || ''}"`,
+                    h.fecha_siembra || '', h.fecha_cierre || ''
+                ];
+                csvContent += fila.join(";") + "\n";
+            });
+        }
 
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        const sufijoFile = this.filtroActual ? this.filtroActual.replace(/\s+/g, '_') : 'General';
-
-        link.href = URL.createObjectURL(blob);
-        link.setAttribute("download", `Salvucci_Produccion_${sufijoFile}_${Date.now()}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        const nombreArchivo = `Salvucci_Produccion_${sufijoFile}_${Date.now()}.csv`;
+        descargarNativoBlob(blob, nombreArchivo);
+        if (this.m_notificarApple) this.m_notificarApple("Planilla generada con éxito.", "exito");
     },
 
     m_exportarPDF: async function() {
-        const datos = this.m_obtenerDatosFiltrados();
-        if (datos.length === 0) return alert("No hay registros para emitir el reporte.");
+        const datos = this.m_obtenerDatosFiltrados() || [];
+        if (datos.length === 0) {
+            return this.m_notificarApple ? this.m_notificarApple("No hay registros para emitir el reporte.", "error") : alert("No hay registros para emitir el reporte.");
+        }
 
         const totalKilos = datos.reduce((a, c) => a + (Number(c.kilos) || 0), 0);
         const totalHas = datos.reduce((a, c) => a + (Number(c.sup) || 0), 0);
         const rindeGral = totalHas > 0 ? (totalKilos / totalHas).toFixed(2) : "0.00";
 
+        const esElectron = typeof require === 'function';
+        const folio = generarFolio('PRD');
+        const hoyStr = new Date().toISOString().split('T')[0];
+        const emitido = new Date().toLocaleString('es-AR');
+        const operario = (typeof operarioName !== 'undefined' ? operarioName : (window.operarioGlobal || 'ADMINISTRADOR')).toUpperCase();
+
+        const tieneJsPDF = typeof window.jspdf !== 'undefined' || (esElectron && (() => { try { require('jspdf'); return true; } catch(e) { return false; } })());
+
+        if (tieneJsPDF) {
+            try {
+                const { jsPDF } = esElectron ? require('jspdf') : window.jspdf;
+                if (esElectron) require('jspdf-autotable');
+
+                const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'landscape' });
+                const pageW = doc.internal.pageSize.getWidth();
+                const pageH = doc.internal.pageSize.getHeight();
+                const margen = 12;
+                const ALTO_HEADER = 38;
+                const ALTO_PIE = 14;
+                const logoBase64 = cargarLogoBase64();
+
+                function dibujarEncabezado(data) {
+                    const pagina = data && data.pageNumber ? data.pageNumber : 1;
+
+                    doc.setFillColor(SALVUCCI_CONF.rgbTema[0], SALVUCCI_CONF.rgbTema[1], SALVUCCI_CONF.rgbTema[2]);
+                    doc.rect(0, 0, pageW, 3, 'F');
+                    doc.setFillColor(248, 250, 248);
+                    doc.rect(0, 3, pageW, ALTO_HEADER - 3, 'F');
+
+                    if (logoBase64) {
+                        try { doc.addImage('data:image/png;base64,' + logoBase64, 'PNG', margen, 6.5, 19, 19); } catch (e) {}
+                    } else {
+                        doc.setDrawColor(200, 205, 208);
+                        doc.setLineWidth(0.3);
+                        doc.roundedRect(margen, 6.5, 19, 19, 2, 2, 'D');
+                    }
+
+                    const xTexto = margen + 24;
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(13);
+                    doc.setTextColor(SALVUCCI_CONF.rgbTemaDark[0], SALVUCCI_CONF.rgbTemaDark[1], SALVUCCI_CONF.rgbTemaDark[2]);
+                    doc.text('SALVUCCI GESTIÓN · PRODUCCIÓN Y RENDIMIENTOS', xTexto, 12.5);
+
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(8);
+                    doc.setTextColor(85, 99, 88);
+                    doc.text('Auditoría Central de Cosecha y Despacho Agrícola', xTexto, 17);
+
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(10.5);
+                    doc.setTextColor(SALVUCCI_CONF.rgbTema[0], SALVUCCI_CONF.rgbTema[1], SALVUCCI_CONF.rgbTema[2]);
+                    doc.text(`ESTABLECIMIENTO: ${ModuloProduccion.filtroActual ? ModuloProduccion.filtroActual.toUpperCase() : 'CONSOLIDADO GENERAL'}`, xTexto, 24.5);
+
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(7.5);
+                    doc.setTextColor(110, 120, 115);
+                    doc.text(`Cosechas: ${datos.length} lotes   ·   Rinde Promedio: ${rindeGral} kg/Ha`, xTexto, 29);
+
+                    const anchoCb = 60;
+                    const xCb = pageW - margen - anchoCb;
+                    dibujarCodigoBarrasPdf(doc, folio, xCb, 6.5, anchoCb, 10);
+
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(7.2);
+                    doc.setTextColor(90, 100, 95);
+                    doc.text(`Emitido: ${emitido}`, pageW - margen, 24, { align: 'right' });
+                    doc.text(`Operador: ${operario}`, pageW - margen, 28, { align: 'right' });
+                    doc.text(`Volumen: ${totalKilos.toLocaleString('es-AR')} KG   ·   Hoja ${pagina}`, pageW - margen, 32, { align: 'right' });
+
+                    doc.setDrawColor(SALVUCCI_CONF.rgbTema[0], SALVUCCI_CONF.rgbTema[1], SALVUCCI_CONF.rgbTema[2]);
+                    doc.setLineWidth(0.5);
+                    doc.line(margen, ALTO_HEADER - 2, pageW - margen, ALTO_HEADER - 2);
+                }
+
+                const columnasPdf = [
+                    { header: 'CAMPAÑA', dataKey: 'campana', cellWidth: 24, halign: 'center' },
+                    { header: 'FECHA', dataKey: 'fecha', cellWidth: 24, halign: 'center' },
+                    { header: 'ESTABLECIMIENTO', dataKey: 'establecimiento', cellWidth: 40 },
+                    { header: 'CAMPO', dataKey: 'campo', cellWidth: 36 },
+                    { header: 'LOTE', dataKey: 'lote', cellWidth: 20, halign: 'center' },
+                    { header: 'CULTIVO', dataKey: 'cultivo', cellWidth: 32 },
+                    { header: 'VARIEDAD', dataKey: 'variedad', cellWidth: 28 },
+                    { header: 'HAS', dataKey: 'sup', cellWidth: 20, halign: 'right' },
+                    { header: 'KILOS TOTALES', dataKey: 'kilos', cellWidth: 28, halign: 'right' },
+                    { header: 'RINDE (KG/HA)', dataKey: 'rend_ha', cellWidth: 26, halign: 'right' }
+                ];
+
+                const filasPdf = datos.map(p => {
+                    const supNum = parseFloat(p.sup) || 0;
+                    const kgNum = parseFloat(p.kilos) || 0;
+                    const rinde = supNum > 0 ? (kgNum / supNum) : (parseFloat(p.rend_ha) || 0);
+
+                    return {
+                        campana: p.campaña || '2025/2026',
+                        fecha: p.fecha_cosecha || '-',
+                        establecimiento: (p.establecimiento || '-').toUpperCase(),
+                        campo: (p.campo || '-').toUpperCase(),
+                        lote: `Lote ${p.lote || '-'}`,
+                        cultivo: (p.cultivo || '-').toUpperCase(),
+                        variedad: p.variedad || 'General',
+                        sup: supNum.toFixed(1),
+                        kilos: kgNum.toLocaleString('es-AR'),
+                        rend_ha: rinde.toFixed(1)
+                    };
+                });
+
+                doc.autoTable({
+                    startY: ALTO_HEADER + 4,
+                    margin: { left: margen, right: margen, top: ALTO_HEADER + 4, bottom: ALTO_PIE + 6 },
+                    columns: columnasPdf,
+                    body: filasPdf,
+                    headStyles: {
+                        fillColor: SALVUCCI_CONF.rgbTema,
+                        textColor: 255,
+                        fontSize: 7.5,
+                        fontStyle: 'bold',
+                        halign: 'center',
+                        valign: 'middle'
+                    },
+                    styles: {
+                        fontSize: 7.2,
+                        cellPadding: 2,
+                        lineColor: [224, 220, 212],
+                        lineWidth: 0.12,
+                        valign: 'middle'
+                    },
+                    alternateRowStyles: { fillColor: [248, 250, 248] },
+                    columnStyles: {
+                        cultivo: { fontStyle: 'bold', textColor: SALVUCCI_CONF.rgbTema },
+                        kilos: { fontStyle: 'bold', textColor: SALVUCCI_CONF.rgbTemaDark },
+                        rend_ha: { fontStyle: 'bold', textColor: SALVUCCI_CONF.rgbTema }
+                    },
+                    theme: 'grid',
+                    didDrawPage: dibujarEncabezado
+                });
+
+                let y = ((doc.lastAutoTable && doc.lastAutoTable.finalY) || ALTO_HEADER + 4) + 6;
+
+                // Panel Resumen KPI de Producción
+                const altoBloque = 36;
+                if (y + altoBloque > pageH - ALTO_PIE) {
+                    doc.addPage();
+                    dibujarEncabezado({ pageNumber: doc.internal.getNumberOfPages() });
+                    y = ALTO_HEADER + 6;
+                }
+
+                const anchoPanel = pageW - margen * 2;
+                doc.setFillColor(248, 250, 248);
+                doc.setDrawColor(220, 225, 222);
+                doc.setLineWidth(0.25);
+                doc.roundedRect(margen, y, anchoPanel, 18, 2, 2, 'FD');
+
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(7.8);
+                doc.setTextColor(SALVUCCI_CONF.rgbTema[0], SALVUCCI_CONF.rgbTema[1], SALVUCCI_CONF.rgbTema[2]);
+                doc.text('RESUMEN GENERAL DE PRODUCCIÓN AGRÍCOLA', margen + 5, y + 5);
+
+                const itemsRes = [
+                    { label: 'REGISTROS COSECHADOS', val: String(datos.length) },
+                    { label: 'SUPERFICIE TOTAL', val: `${totalHas.toFixed(1)} Has` },
+                    { label: 'VOLUMEN RECOLECTADO', val: `${totalKilos.toLocaleString('es-AR')} KG` },
+                    { label: 'RENDIMIENTO PROMEDIO', val: `${rindeGral} KG/HA` }
+                ];
+
+                const anchoItem = (anchoPanel - 10) / itemsRes.length;
+                itemsRes.forEach((it, idx) => {
+                    const xi = margen + 5 + anchoItem * idx;
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(6.4);
+                    doc.setTextColor(110, 120, 115);
+                    doc.text(it.label, xi, y + 10);
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(9.5);
+                    doc.setTextColor(SALVUCCI_CONF.rgbTemaDark[0], SALVUCCI_CONF.rgbTemaDark[1], SALVUCCI_CONF.rgbTemaDark[2]);
+                    doc.text(it.val, xi, y + 14.8);
+                });
+
+                // Panel de Firma
+                const yFirma = y + 28;
+                doc.setDrawColor(120, 130, 125);
+                doc.setLineWidth(0.25);
+                doc.line(margen + 25, yFirma, margen + 95, yFirma);
+                doc.line(pageW - margen - 95, yFirma, pageW - margen - 25, yFirma);
+
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(7.2);
+                doc.setTextColor(90, 100, 95);
+                doc.text('Responsable de Cosecha / Balanza', margen + 60, yFirma + 3.8, { align: 'center' });
+                doc.text('Auditoría General / Administración', pageW - margen - 60, yFirma + 3.8, { align: 'center' });
+
+                const totalPaginas = doc.internal.getNumberOfPages();
+                for (let i = 1; i <= totalPaginas; i++) {
+                    doc.setPage(i);
+                    doc.setDrawColor(220, 225, 222);
+                    doc.setLineWidth(0.2);
+                    doc.line(margen, pageH - 10, pageW - margen, pageH - 10);
+
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(7);
+                    doc.setTextColor(90, 100, 95);
+                    doc.text(SALVUCCI_CONF.pieInstitucional, margen, pageH - 6);
+
+                    doc.setFont('helvetica', 'normal');
+                    doc.setFontSize(6.8);
+                    doc.text(`Folio ${folio}   ·   Página ${i} de ${totalPaginas}`, pageW - margen, pageH - 6, { align: 'right' });
+                }
+
+                const sufijoFile = ModuloProduccion.filtroActual ? ModuloProduccion.filtroActual.replace(/\s+/g, '_') : 'General';
+                const nombre = `Salvucci_Produccion_${sufijoFile}_${hoyStr}.pdf`;
+
+                if (esElectron) {
+                    guardarEnDescargas(nombre, Buffer.from(doc.output('arraybuffer')));
+                    if (this.m_notificarApple) this.m_notificarApple(`✓ PDF guardado en Descargas: ${nombre}`, "exito");
+                    else alert(`PDF guardado en Descargas: ${nombre}`);
+                } else {
+                    doc.save(nombre);
+                }
+                return;
+
+            } catch (err) {
+                console.warn("Fallo jsPDF en producción, usando ventana de impresión:", err);
+            }
+        }
+
+        // Respaldo Web con código de barras en base64
+        const cbWebBase64 = codigoBarrasPngBase64(folio, 320, 50) || '';
+        const sufijoFile = this.filtroActual ? this.filtroActual.replace(/\s+/g, '_') : 'General';
         const ventanaImpresion = window.open('', '_blank');
         ventanaImpresion.document.write(`
             <html>
             <head>
+                <meta charset="UTF-8">
                 <title>Salvucci Gestión - Reporte de Cosecha y Rendimiento</title>
                 <style>
                     @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&display=swap');
-                    body { font-family: 'Roboto', sans-serif; color: #211C16; padding: 35px; margin: 0; background: #F5F4F1; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-                    .header-pdf-premium { border-bottom: 3px solid #1E6B4C; padding-bottom: 14px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; background:#FFFFFF; padding:18px; border-radius:12px; border:1px solid #E0DCD4; }
-                    .logo-container-apple { width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; margin-right: 15px; }
-                    .logo-container-apple img { width: 100%; height: 100%; object-fit: contain; }
-                    .titulos-reporte h1 { margin: 0; font-size: 18px; font-weight: 900; color: #123F2C; }
-                    .titulos-reporte h2 { margin: 3px 0 0 0; font-size: 11px; color: #1E6B4C; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
-                    .kpi-tile-top { background:rgba(30,107,76,0.08); border:1px solid rgba(30,107,76,0.25); padding:8px 14px; border-radius:8px; text-align:right; }
-                    table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 8px; background:#FFFFFF; border-radius:8px; overflow:hidden; }
-                    th { background: #123F2C; color: #FFFFFF; text-align: left; padding: 8px; font-weight: 700; }
-                    td { padding: 7px 8px; border-bottom: 1px solid #E0DCD4; color: #211C16; }
-                    .footer-firma-fija { margin-top: 30px; border-top: 1px solid #E0DCD4; padding-top: 15px; display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: #6B6255; page-break-inside: avoid; }
-                    @media print { body { background: #FFFFFF; padding: 15px; } }
+                    @page { size: landscape; margin: 10mm; }
+                    body { font-family: 'Roboto', sans-serif; color: #211C16; padding: 25px; margin: 0; background: #FFFFFF; font-size: 11px; }
+                    .header-pdf-premium { border-bottom: 2.5px solid #1E6B4C; padding: 14px 18px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; background: #F8FAF8; border-radius: 8px; border: 1px solid #D2D7D3; }
+                    .logo-box { width: 55px; height: 55px; display: flex; align-items: center; justify-content: center; margin-right: 14px; }
+                    .logo-box img { width: 100%; height: 100%; object-fit: contain; }
+                    .titulos h1 { margin: 0; font-size: 16px; font-weight: 900; color: #123F2C; }
+                    .titulos h2 { margin: 2px 0 0 0; font-size: 10px; color: #1E6B4C; font-weight: 800; text-transform: uppercase; }
+                    .kpi-tile-top { background: #FFFFFF; border: 1px solid #C8E6C9; padding: 6px 14px; border-radius: 6px; text-align: right; }
+                    table { width: 100%; border-collapse: collapse; font-size: 9.5px; margin-top: 8px; }
+                    th { background: #1E6B4C; color: #FFFFFF; text-align: left; padding: 6px 8px; font-weight: 700; text-transform: uppercase; font-size: 8px; }
+                    td { padding: 5px 8px; border-bottom: 1px solid #E2E8F0; }
+                    tr:nth-child(even) { background: #FAFBFA; }
+                    .footer-firma-fija { margin-top: 25px; border-top: 1px solid #D2D7D3; padding-top: 15px; display: flex; justify-content: space-between; align-items: center; font-size: 9px; color: #556358; }
                 </style>
             </head>
             <body>
                 <div class="header-pdf-premium">
                     <div style="display:flex; align-items:center;">
-                        <div class="logo-container-apple">
+                        <div class="logo-box">
                             <img src="logo.png" onerror="this.style.display='none';" />
                         </div>
-                        <div class="titulos-reporte">
+                        <div class="titulos">
                             <h2>SALVUCCI GESTIÓN · PRODUCCIÓN Y RENDIMIENTOS</h2>
                             <h1>ESTABLECIMIENTO: ${this.filtroActual ? this.filtroActual.toUpperCase() : 'CONSOLIDADO GENERAL'}</h1>
+                            <p>${SALVUCCI_CONF.empresaDomicilio} · Operador: ${operario}</p>
                         </div>
                     </div>
-                    <div class="kpi-tile-top">
-                        <div style="font-size:9px; color:#6B6255; font-weight:700; text-transform:uppercase;">Volumen Total Cosechado</div>
-                        <div style="font-size:16px; font-weight:900; color:#1E6B4C;">${totalKilos.toLocaleString('es-AR')} KG</div>
-                        <small style="font-size:9px; color:#6B6255;">Rinde Promedio: ${rindeGral} kg/Ha</small>
+                    <div style="display:flex; align-items:center; gap:16px;">
+                        ${cbWebBase64 ? `<img src="${cbWebBase64}" style="height:38px;" />` : ''}
+                        <div class="kpi-tile-top">
+                            <div style="font-size:8.5px; color:#556358; font-weight:700; text-transform:uppercase;">Volumen Cosechado</div>
+                            <div style="font-size:15px; font-weight:900; color:#1E6B4C;">${totalKilos.toLocaleString('es-AR')} KG</div>
+                            <small style="font-size:8px; color:#556358;">Rinde: ${rindeGral} kg/Ha | Has: ${totalHas.toFixed(1)}</small>
+                        </div>
                     </div>
-                </div>
-
-                <div style="margin-bottom:8px; font-size:11px; font-weight:800; color:#123F2C; text-transform:uppercase;">
-                    ■ DETALLE DE COSECHAS REGISTRADAS (${datos.length})
                 </div>
 
                 <table>
                     <thead>
                         <tr>
-                            <th>CAMPAÑA</th><th>FECHA</th><th>ESTABLECIMIENTO</th><th>CAMPO</th><th>LOTE</th>
+                            <th>CAMPAÑA</th><th>FECHA</th><th>ESTABLECIMIENTO</th><th>CAMPO</th><th style="text-align:center;">LOTE</th>
                             <th>CULTIVO</th><th>VARIEDAD</th><th style="text-align:right;">HAS</th>
                             <th style="text-align:right;">KILOS</th><th style="text-align:right;">RINDE (KG/HA)</th>
                         </tr>
@@ -923,29 +1384,36 @@ const ModuloProduccion = {
                     <tbody>
                         ${datos.map(p => `
                             <tr>
-                                <td><b>${p.campaña}</b></td>
+                                <td><b>${p.campaña || '-'}</b></td>
                                 <td>${p.fecha_cosecha || '-'}</td>
-                                <td>${p.establecimiento}</td>
-                                <td>${p.campo}</td>
-                                <td><b>Lote ${p.lote}</b></td>
+                                <td>${(p.establecimiento || '-').toUpperCase()}</td>
+                                <td>${(p.campo || '-').toUpperCase()}</td>
+                                <td style="text-align:center;"><b>Lote ${p.lote}</b></td>
                                 <td><strong style="color:#1E6B4C;">${(p.cultivo || '').toUpperCase()}</strong></td>
-                                <td>${p.variedad || '-'}</td>
+                                <td>${p.variedad || 'General'}</td>
                                 <td style="text-align:right;">${parseFloat(p.sup || 0).toFixed(1)}</td>
                                 <td style="text-align:right; font-weight:800;">${Number(p.kilos || 0).toLocaleString('es-AR')}</td>
                                 <td style="text-align:right; font-weight:800; color:#1E6B4C;">${p.rend_ha}</td>
                             </tr>
                         `).join('')}
+                        <tr style="background:#ECEFF1; font-weight:bold;">
+                            <td colspan="7">TOTALES GENERALES Y RINDE PROMEDIO</td>
+                            <td style="text-align:right;">${totalHas.toFixed(1)} Has</td>
+                            <td style="text-align:right; color:#1E6B4C;">${totalKilos.toLocaleString('es-AR')} KG</td>
+                            <td style="text-align:right; color:#1E6B4C;">${rindeGral}</td>
+                        </tr>
                     </tbody>
                 </table>
 
                 <div class="footer-firma-fija">
-                    <span>Salvucci Gestión &bull; Ecosistema Territorial Local</span>
+                    <span>${SALVUCCI_CONF.pieInstitucional}</span>
+                    <span>Folio: ${folio} · Emitido: ${emitido}</span>
                     <span style="font-weight:bold;">Firma Responsable Auditoría: ___________________________</span>
                 </div>
 
                 <script>
-                    window.onload = function() { setTimeout(() => { window.print(); window.close(); }, 300); }
-                </script>
+                    window.onload = function() { setTimeout(() => { window.print(); window.close(); }, 350); };
+                <\/script>
             </body>
             </html>
         `);

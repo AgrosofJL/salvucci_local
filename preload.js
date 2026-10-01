@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld('apiLocal', {
     supabaseLogin: (datosLogin) => ipcRenderer.invoke('supabase-login', datosLogin)
 });
 
-/* ACA ES LO NUEVO: Bridge Local para SQLite expuesto correctamente a Window */
+// 2. Bridge Local para SQLite expuesto correctamente a Window
 contextBridge.exposeInMainWorld('dbLocal', {
     async select(tabla, opciones = {}) {
         let sql = `SELECT * FROM ${tabla}`;
@@ -55,4 +55,9 @@ contextBridge.exposeInMainWorld('dbLocal', {
         const maxVal = (res && res[0] && res[0].max_val) ? parseInt(res[0].max_val) : 0;
         return maxVal + 1;
     }
+});
+
+// 3. Exposición directa de electronAPI para canales IPC nativos
+contextBridge.exposeInMainWorld('electronAPI', {
+    invoke: (channel, data) => ipcRenderer.invoke(channel, data)
 });

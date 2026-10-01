@@ -1,8 +1,4 @@
-﻿/**
- * ComponentesUI: Utilidades Globales para Mensajes y Confirmaciones
- * AgroSoft J&L - Estilo Apple Soft
- * ESTO LO MODIFIQUE: Unificación de notificaciones flotantes con animación 3D e Isla Central Superior.
- */
+﻿
 const ComponentesUI = {
 
     // a) BOTÓN "VOLVER": mismo botón que ya usa render.js en la vista de categoría,

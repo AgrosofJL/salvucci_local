@@ -864,121 +864,209 @@ const ModuloGastosAdm = {
         }
     },
 
-    m_exportarExcel: function() {
-        if (this.datosEgresos.length === 0) return this.m_mostrarNotificacion("No existen registros contables para exportar.", 'error');
+   m_exportarExcel: async function() {
+        if (!this.datosEgresos || this.datosEgresos.length === 0) {
+            return this.m_mostrarNotificacion ? this.m_mostrarNotificacion("No existen registros contables para exportar.", 'error') : alert("No existen registros.");
+        }
 
+        const esElectron = typeof require === 'function' && typeof process !== 'undefined';
+        const folio = typeof window.generarFolio === 'function' ? window.generarFolio('ADM') : `ADM-${Date.now().toString().slice(-6)}`;
+        const hoyStr = new Date().toISOString().split('T')[0];
+        const operario = (typeof operarioName !== 'undefined' ? operarioName : (window.operarioGlobal || 'ADMINISTRADOR')).toUpperCase();
+
+        const confTema = window.SALVUCCI_CONF || {
+            argbDark: 'FF123F2C',
+            argbTema: 'FF1E6B4C',
+            empresaRazon: 'SALVUCCI GESTIÓN · AGROSOFT J&L',
+            empresaDomicilio: 'Auditoría Administrativa y Contable'
+        };
+
+        let ExcelJS = null;
+        if (typeof window !== 'undefined' && window.ExcelJS) {
+            ExcelJS = window.ExcelJS;
+        } else if (esElectron) {
+            try { ExcelJS = require('exceljs'); } catch (e) { ExcelJS = null; }
+        }
+
+        const columnas = [
+            { header: 'ID', key: 'id', width: 10, halign: 'center' },
+            { header: 'REG_LOCAL', key: 'reg_local', width: 12, halign: 'center' },
+            { header: 'FECHA', key: 'fecha', width: 14, halign: 'center' },
+            { header: 'CONCEPTO GASTO', key: 'insumo', width: 26 },
+            { header: 'ESTABLECIMIENTO', key: 'establecimiento', width: 22 },
+            { header: 'CUADRO', key: 'cuadro', width: 14, halign: 'center' },
+            { header: 'HA AFECTADAS', key: 'sup_uso', width: 15, halign: 'right', numero: true },
+            { header: 'U$S UNITARIO', key: 'imp_uni', width: 16, halign: 'right', numero: true },
+            { header: 'COTIZACIÓN', key: 'cotizacion', width: 15, halign: 'right', numero: true },
+            { header: 'TOTAL USD', key: 'total_dolar', width: 18, halign: 'right', numero: true, destacada: true },
+            { header: 'TOTAL PESOS', key: 'total_pesos', width: 20, halign: 'right', numero: true },
+            { header: 'CENTRO COSTO', key: 'centro_costo', width: 20 },
+            { header: 'ESTADO', key: 'estado', width: 12, halign: 'center' }
+        ];
+
+        let sumaUsd = 0, sumaPesos = 0, sumaHa = 0;
+
+        const filas = this.datosEgresos.map(g => {
+            const usd = Number(g.total_dolar || 0);
+            const pesos = Number(g.total_pesos || 0);
+            const sup = Number(g.sup_uso || 0);
+
+            sumaUsd += usd;
+            sumaPesos += pesos;
+            sumaHa += sup;
+
+            return {
+                id: g.id || '',
+                reg_local: g.reg_local || '',
+                fecha: g.fecha || '-',
+                insumo: (g.insumo || '').toUpperCase(),
+                establecimiento: (g.establecimiento || '-').toUpperCase(),
+                cuadro: g.cuadro || '-',
+                sup_uso: sup,
+                imp_uni: Number(g.imp_uni || 0),
+                cotizacion: Number(g.cotizacion || 0),
+                total_dolar: usd,
+                total_pesos: pesos,
+                centro_costo: (g.centro_costo || '-').toUpperCase(),
+                estado: (g.estado || 'ACTIVO').toUpperCase()
+            };
+        });
+
+        if (ExcelJS) {
+            try {
+                const wb = new ExcelJS.Workbook();
+                wb.creator = 'Salvucci Gestión · AgroSoft J&L';
+                wb.created = new Date();
+
+                const ws = wb.addWorksheet('Gastos Administrativos', {
+                    views: [{ state: 'frozen', ySplit: 5 }],
+                    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+                });
+
+                ws.columns = columnas.map(c => ({ header: c.header, key: c.key, width: c.width }));
+                filas.forEach(f => ws.addRow(f));
+
+                ws.spliceRows(1, 0, [], [], [], []);
+                const nCols = columnas.length;
+
+                ws.getRow(1).height = 30;
+                ws.getRow(2).height = 16;
+                ws.getRow(3).height = 15;
+                ws.getRow(4).height = 15;
+
+                for (let r = 1; r <= 4; r++) ws.mergeCells(r, 1, r, nCols);
+
+                const cTitulo = ws.getCell(1, 1);
+                cTitulo.value = 'SALVUCCI GESTIÓN — LIBRO DE GASTOS ADMINISTRATIVOS Y OPERATIVOS';
+                cTitulo.font = { bold: true, size: 14, color: { argb: confTema.argbDark } };
+                cTitulo.alignment = { vertical: 'middle', horizontal: 'left' };
+
+                const cSub = ws.getCell(2, 1);
+                cSub.value = 'Auditoría cronológica de costos imputados, cotizaciones cambiarias y centros de costo';
+                cSub.font = { italic: true, size: 9.5, color: { argb: 'FF556358' } };
+                cSub.alignment = { vertical: 'middle', horizontal: 'left' };
+
+                const cEmpresa = ws.getCell(3, 1);
+                cEmpresa.value = `${confTema.empresaRazon} — ${confTema.empresaDomicilio}`;
+                cEmpresa.font = { size: 8.5, color: { argb: 'FF556358' } };
+                cEmpresa.alignment = { vertical: 'middle', horizontal: 'left' };
+
+                const cMeta = ws.getCell(4, 1);
+                cMeta.value = `Folio: ${folio}   ·   Emitido: ${new Date().toLocaleString('es-AR')}   ·   Operador: ${operario}   ·   Asientos: ${this.datosEgresos.length}`;
+                cMeta.font = { bold: true, size: 8.5, color: { argb: confTema.argbTema } };
+                cMeta.alignment = { vertical: 'middle', horizontal: 'left' };
+
+                const filaHead = ws.getRow(5);
+                filaHead.height = 24;
+                filaHead.eachCell({ includeEmpty: true }, cell => {
+                    cell.font = { bold: true, size: 9.2, color: { argb: 'FFFFFFFF' } };
+                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: confTema.argbTema } };
+                    cell.alignment = { vertical: 'middle', horizontal: 'center' };
+                    cell.border = { bottom: { style: 'thin', color: { argb: confTema.argbDark } } };
+                });
+
+                const primeraFila = 6;
+                const ultimaFila = primeraFila + filas.length - 1;
+
+                for (let r = primeraFila; r <= ultimaFila; r++) {
+                    const fila = ws.getRow(r);
+                    columnas.forEach((c, i) => {
+                        const cell = fila.getCell(i + 1);
+                        cell.alignment = { vertical: 'middle', horizontal: c.halign || 'left' };
+                        cell.font = { size: 9, bold: !!c.destacada };
+                        cell.border = {
+                            top: { style: 'hair', color: { argb: 'FFE0DCD4' } },
+                            bottom: { style: 'hair', color: { argb: 'FFE0DCD4' } }
+                        };
+                        if (c.key === 'sup_uso') cell.numFmt = '#,##0.00';
+                        if (c.key === 'imp_uni') cell.numFmt = '"U$S" #,##0.00';
+                        if (c.key === 'cotizacion') cell.numFmt = '#,##0.00';
+                        if (c.key === 'total_dolar') {
+                            cell.numFmt = '"U$S" #,##0.00';
+                            cell.font = { size: 9, bold: true, color: { argb: 'FF1E6B4C' } };
+                        }
+                        if (c.key === 'total_pesos') {
+                            cell.numFmt = '"$" #,##0.00';
+                        }
+                    });
+                    if ((r - primeraFila) % 2 === 1) {
+                        fila.eachCell({ includeEmpty: true }, cell => {
+                            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9FBF9' } };
+                        });
+                    }
+                }
+
+                const filaTot = ws.getRow(ultimaFila + 2);
+                filaTot.height = 22;
+                columnas.forEach((c, i) => {
+                    const cell = filaTot.getCell(i + 1);
+                    if (i === 0) cell.value = 'TOTALES GENERALES';
+                    else if (c.key === 'sup_uso' || c.key === 'total_dolar' || c.key === 'total_pesos') {
+                        const colLetra = cell.address.replace(/\d+$/, '');
+                        cell.value = { formula: `SUM(${colLetra}${primeraFila}:${colLetra}${ultimaFila})` };
+                        if (c.key === 'sup_uso') cell.numFmt = '#,##0.00';
+                        if (c.key === 'total_dolar') cell.numFmt = '"U$S" #,##0.00';
+                        if (c.key === 'total_pesos') cell.numFmt = '"$" #,##0.00';
+                    }
+                    cell.font = { bold: true, size: 9.5, color: { argb: 'FFFFFFFF' } };
+                    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: confTema.argbDark } };
+                    cell.alignment = { vertical: 'middle', horizontal: c.halign || 'left' };
+                });
+
+                const nombreArchivo = `AgroSoft_Gastos_Administrativos_${hoyStr}.xlsx`;
+                const buffer = await wb.xlsx.writeBuffer();
+
+                if (esElectron && typeof window.guardarEnDescargas === 'function') {
+                    window.guardarEnDescargas(nombreArchivo, Buffer.from(buffer));
+                    if (this.m_mostrarNotificacion) this.m_mostrarNotificacion(`✓ Excel generado: ${nombreArchivo}`, 'exito');
+                } else if (typeof window.descargarNativoBlob === 'function') {
+                    window.descargarNativoBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), nombreArchivo);
+                }
+                return;
+            } catch (err) {
+                console.warn("Fallo motor ExcelJS, utilizando respaldo CSV:", err);
+            }
+        }
+
+        // Respaldo CSV
         const headers = ["ID", "REG_LOCAL", "FECHA", "CONCEPTO GASTO", "ESTABLECIMIENTO", "CUADRO", "HA AFECTADAS", "U$S UNITARIO", "COTIZACION", "TOTAL USD", "TOTAL PESOS", "CENTRO COSTO", "ESTADO"];
         let csvContent = "\uFEFF" + headers.join(";") + "\n";
-
-        this.datosEgresos.forEach(g => {
-            const row = [
-                g.id, g.reg_local, g.fecha, `"${g.insumo}"`, `"${g.establecimiento}"`, `"${g.cuadro || ''}"`,
-                g.sup_uso, g.imp_uni, g.cotizacion, g.total_dolar, g.total_pesos, `"${g.centro_costo || ''}"`, `"ACTIVO"`
-            ];
-            csvContent += row.join(";") + "\n";
+        filas.forEach(g => {
+            csvContent += [
+                g.id, g.reg_local, g.fecha, `"${g.insumo}"`, `"${g.establecimiento}"`, `"${g.cuadro}"`,
+                g.sup_uso, g.imp_uni, g.cotizacion, g.total_dolar, g.total_pesos, `"${g.centro_costo}"`, `"${g.estado}"`
+            ].join(";") + "\n";
         });
-
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.setAttribute("download", `AgroSoft_Gastos_Administrativos_${Date.now()}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        const nombreArchivo = `AgroSoft_Gastos_Administrativos_${hoyStr}.csv`;
+        if (typeof window.descargarNativoBlob === 'function') window.descargarNativoBlob(blob, nombreArchivo);
+        else {
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.download = nombreArchivo;
+            link.click();
+        }
     },
-
-    m_exportarPDFGlobal: function() {
-        if (this.datosEgresos.length === 0) return this.m_mostrarNotificacion("Sábana de egresos vacía. No es posible consolidar gráficos.", 'error');
-
-        const consolidadoConceptos = {};
-        this.datosEgresos.forEach(g => {
-            const cache = parseFloat(g.total_dolar || 0);
-            consolidadoConceptos[g.insumo] = (consolidadoConceptos[g.insumo] || 0) + cache;
-        });
-
-        let svgGrafico3D = `<svg width="100%" height="160" style="background:#F6F7F9; border:1px solid #E4E7EC; border-radius:14px; padding:20px;">`;
-        let yDelta = 35;
-        Object.entries(consolidadoConceptos).slice(0, 4).forEach(([concepto, usd]) => {
-            const maxW = 350;
-            const barW = Math.max(15, Math.min((usd / 30000) * maxW, maxW));
-            svgGrafico3D += `
-                <text x="20" y="${yDelta + 13}" font-family="sans-serif" font-size="11" font-weight="700" fill="#1D1D1F">${concepto.toUpperCase().slice(0,18)}</text>
-                <polygon points="${150},${yDelta} ${150 + barW},${yDelta} ${154 + barW},${yDelta - 5} ${154},${yDelta - 5}" fill="#0071E3" opacity="0.75" />
-                <rect x="150" y="${yDelta}" width="${barW}" height="14" fill="#0071E3" />
-                <polygon points="${150 + barW},${yDelta} ${154 + barW},${yDelta - 5} ${154 + barW},${yDelta + 9} ${150 + barW},${yDelta + 14}" fill="#0062C4" />
-                <text x="${165 + barW}" y="${yDelta + 12}" font-family="sans-serif" font-size="11" font-weight="700" fill="#0071E3">U$S ${usd.toLocaleString('es-AR')}</text>
-            `;
-            yDelta += 32;
-        });
-        svgGrafico3D += `</svg>`;
-
-        const ventanaImpresion = window.open('', '_blank');
-        ventanaImpresion.document.write(`
-            <html>
-            <head>
-                <title>AgroSoft J&L - Auditoría de Gastos</title>
-                <style>
-                    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&display=swap');
-                    body { font-family: 'Roboto', sans-serif; padding: 40px; color: #1D1D1F; background:#FFFFFF; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-                    .header-pdf-premium { border-bottom: 3px solid #1FA958; padding-bottom: 15px; margin-bottom: 30px; display: flex; justify-content: space-between; align-items: flex-start; }
-                    /* ESTO LO MODIFIQUE: Logo 3x3 pulgadas en margen superior izquierdo */
-                    .logo-container-apple { width: 3in; height: 3in; border: 1px solid #E4E7EC; background: #F6F7F9; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #6E6E73; font-weight: bold; text-align: center; border-radius: 12px; margin-right: 20px; }
-                    table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 15px; }
-                    th { background: #F6F7F9; padding: 8px; border-bottom: 2px solid #E4E7EC; text-align: left; }
-                    td { padding: 8px; border-bottom: 1px solid #E4E7EC; }
-                </style>
-            </head>
-            <body>
-                <div class="header-pdf-premium">
-                    <div class="logo-container-apple" id="logo-ctx-box">
-                        AGROSOFT J&L<br>LOGO OFICIAL<br>3x3 PULGADAS
-                    </div>
-                    <div>
-                        <small style="color:#6E6E73; font-weight:bold; letter-spacing:1px;">Ecosystem Ledger terminal (base Local)</small>
-                        <h1 style="margin:5px 0 0 0; font-size:22px; font-weight:900;">Reporte Consolidado - Gastos Administrativos</h1>
-                    </div>
-                    <div style="text-align:right; font-size:11px;">
-                        <strong>EMISIÓN:</strong> ${new Date().toLocaleDateString('es-AR')}<br>
-                        <strong>INVERSIÓN TOTAL USD:</strong> U$S ${this.datosEgresos.reduce((a,c)=>a+parseFloat(c.total_dolar||0),0).toLocaleString('es-AR')}
-                    </div>
-                </div>
-
-                <div style="margin-bottom:30px;">
-                    <h4 style="font-size:11px; font-weight:800; text-transform:uppercase;">■ REPARTICIÓN ESTRATÉGICA POR CONCEPTO DE EGRESO (USD)</h4>
-                    ${svgGrafico3D}
-                </div>
-
-                <h4>■ DETALLE CRONOLÓGICO DE GASTOS ASENTADOS</h4>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>REG_LOCAL</th>
-                            <th>FECHA</th>
-                            <th>CONCEPTO GASTO</th>
-                            <th>ESTABLECIMIENTO</th>
-                            <th>CUADRO</th>
-                            <th style="text-align:right;">TOTAL PESOS</th>
-                            <th style="text-align:right;">TOTAL USD</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${this.datosEgresos.map(g => `
-                            <tr>
-                                <td>#${g.reg_local}</td>
-                                <td>${g.fecha}</td>
-                                <td><b>${g.insumo}</b></td>
-                                <td>${g.establecimiento}</td>
-                                <td>${g.cuadro || '---'}</td>
-                                <td style="text-align:right; color:#0071E3;">$ ${Number(g.total_pesos).toLocaleString('es-AR')}</td>
-                                <td style="text-align:right; font-weight:bold; color:#1FA958;">U$S ${Number(g.total_dolar).toLocaleString('es-AR', {minimumFractionDigits:2})}</td>
-                            </tr>`).join('')}
-                    </tbody>
-                </table>
-                <script>window.onload = function() { window.print(); setTimeout(function() { window.close(); }, 500); }</script>
-            </body>
-            </html>`);
-        ventanaImpresion.document.close();
-    }
 };
 
 window.ModuloGastosAdm = ModuloGastosAdm;
